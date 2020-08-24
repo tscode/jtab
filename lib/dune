@@ -1,0 +1,4 @@
+(library
+ (name jtable)
+ (libraries lwt lwt_react tyxml yojson)
+ (preprocess (pps ppx_deriving_yojson)))
