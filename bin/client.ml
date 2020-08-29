@@ -1,6 +1,4 @@
 
-print_endline "ocaml says hello in javascript"
-
 open Jtable
 
 open Lwt
@@ -44,24 +42,30 @@ let rec init_status_polling uri_static uri_stream =
 
 (* query events *)
 
-let rec poll_events uri add_event history =
+let rec poll_events uri set_history history =
   let* response = get_xml uri in
   match Result.bind response Event.parse_event_list with
-  | Ok events -> List.iter add_event events;
-    poll_events uri add_event history
+  | Ok events ->
+    List.iter (fun ev -> set_history (ev :: S.value history)) events;
+    poll_events uri set_history history
   | Error msg -> prerr_endline msg |> return
 
 let init_event_polling uri_static uri_stream =
-  let event, add_event = E.create () in
   let+ prior_events =
+    print_endline "here 1";
     let+ response = get_xml uri_static in
-    Result.map print_endline response |> ignore;
-    match Result.bind response Event.parse_event_list with
+    let parse str = String.split_on_char '\n' str |> Event.parse_events in
+    print_endline "here 2";
+    match Result.bind response parse with
     | Ok events -> events
     | Error msg -> prerr_endline msg; []
   in
-  let history = S.fold (fun l e -> e :: l) prior_events event in
-  ignore_result (poll_events uri_stream add_event history);
+  print_endline "here 3";
+  let history, set = S.create prior_events in
+  print_endline "here 4";
+  let event = E.map List.hd (S.changes history) in
+  print_endline "here 5";
+  ignore_result (poll_events uri_stream set history);
   event, history
 
 
@@ -136,11 +140,9 @@ let summary_entry_tyxml ev =
   let text =
     let a = [a_class ["event-summary"]] in
     span ~a [Event.summary ev |> txt] in
-  let entry =
-    let id = Printf.sprintf "event:%d" ev.Event.id |> a_id in
-    let cl = ["event-list-entry"] |> a_class in
-    li ~a:[id; cl] [number; time; text]
-  in entry
+  let id = Printf.sprintf "event:%d" ev.Event.id |> a_id in
+  let cl = ["event-list-entry"] |> a_class in
+  li ~a:[id; cl] [number; time; text]
 
 let prependChild el child =
   Dom.insertBefore el child (el##.firstChild)
@@ -160,6 +162,7 @@ let insert_summary_entry summary_list active set_active filter ev =
     Js._true
   in
   entry##.onclick := Dom_html.handler handle;
+  handle () |> ignore;
   if not (is_visible (S.value filter) ev)
   then entry##.classList##add (Js.string "hidden");
   prependChild summary_list entry
@@ -202,7 +205,68 @@ let show_details history active =
       |> fun x -> Regexp.global_replace (Regexp.regexp "\"") x "" in
       pre##.innerHTML := Js.string str;
   in
+  f (S.value active);
   E.map f (S.changes active) |> E.keep
+  
+
+let render_loss_graph id history =
+  let open Event in
+  let epoch_loss ev = match ev.body with
+  | Epoch ep -> Some (ep.trainloss, ep.testloss)
+  | _ -> None
+  in
+  let train, test = List.filter_map epoch_loss history |> List.split in
+  let render title ls =
+    Uplot.empty ~width:500 ~height:250 ~title ()
+    |> Uplot.time ~label:"epoch"
+    |> Uplot.series ~stroke:"#888888" ~label:"f" ~data:(List.map (fun x -> x.feature) ls)
+    |> Uplot.series ~stroke:"#224488" ~label:"p" ~data:(List.map (fun x -> x.policy) ls)
+    |> Uplot.series ~stroke:"#228844" ~label:"v" ~data:(List.map (fun x -> x.value) ls)
+    |> Uplot.series ~width:2. ~stroke:"#cc8844" ~label:"t" ~data:(List.map (fun x -> x.total) ls)
+    |> Uplot.render id
+  in
+  render "train" train;
+  render "test" test
+
+let render_quality_graph id history =
+  let open Event in
+  let epoch_quality ev = match ev.body with
+  | Epoch ep -> Some ep.quality
+  | _ -> None
+  in
+  let data = List.filter_map epoch_quality history in
+  Uplot.empty ~width:500 ~height:250 ()
+  |> Uplot.time ~label:"epoch"
+  |> Uplot.series ~label:"quality" ~data
+  |> Uplot.render id
+
+let clear_graph_div id =
+  let div = Dom_html.getElementById_exn id in
+  let children = div##.childNodes |> Dom.list_of_nodeList in
+  List.iter (Dom.removeChild div) children
+
+
+let show_progress_graph history =
+  let id = "event-progress-graph" in
+  let el = Dom_html.getElementById_exn "event-progress-select" in
+  match Dom_html.CoerceTo.select el |> Js.Opt.to_option with
+  | None -> prerr_endline "could not initialize progress graph"
+  | Some el ->
+    let selected, set = S.create (el##.value |> Js.to_string) in
+    let handle _ = set (el##.value |> Js.to_string); Js._true in
+    el##.onchange := Dom.handler handle;
+    let f _ =
+      clear_graph_div id;
+      match S.value selected with
+      | "loss" -> render_loss_graph id (S.value history)
+      | "quality" -> render_quality_graph id (S.value history)
+      | _ -> prerr_endline "unsupported graph selected"
+    in
+    (* TODO: E.l2 does not seem to work here? Why? *)
+    f ();
+    E.map f (S.changes selected) |> E.keep;
+    E.map f (S.changes history) |> E.keep
+
 
 let init_events_tab event history =
   let search = event_searchstring () in
@@ -216,7 +280,139 @@ let init_events_tab event history =
   List.iter insert (S.value history |> List.rev);
   E.keep (E.map insert event);
   connect_filter summary_list history filter;
-  show_details history active
+  show_details history active;
+  show_progress_graph history
+
+
+(* script for the CONTEXT tab *)
+
+let insert_context_entry context_list active set_active n t ctx =
+  let id_str id = Printf.sprintf "context:%d" id in
+  let entry = let open Tyxml_js.Html in
+    let time =
+      let a = [a_class ["event-time"]] in
+      span ~a [Event.time_to_string t |> txt] in
+    let number =
+      let a = [a_class ["event-number"]] in
+      span ~a [Printf.sprintf "%d" n |> txt] in
+    let text =
+      let a = [a_class ["event-summary"]] in
+      span ~a [Printf.sprintf "context %d" ctx.Context.id |> txt] in
+    let cl = a_class ["context-list-entry"] in
+    let id = a_id (id_str ctx.Context.id) in
+    li ~a:[id; cl] [number; time; text] |> Tyxml_js.To_dom.of_li
+  in
+  let handle _ =
+    let () = match S.value active with
+    | None -> ()
+    | Some index ->
+      let id = Printf.sprintf "context:%d" index in
+      let active_entry = Dom_html.getElementById_exn id in
+      active_entry##.classList##remove (Js.string "active");
+    in
+    entry##.classList##add (Js.string "active");
+    set_active (None);
+    set_active (Some ctx.id);
+    Js._true
+  in
+  entry##.onclick := Dom_html.handler handle;
+  handle () |> ignore;
+  prependChild context_list entry
+
+let json_to_tyxml_entries ?(label_class=[]) ?(input_class=[])
+                          ?(div_class=[]) ?(prefix="") json =
+  let open Tyxml_js.Html in
+  let create_div (key, value) =
+    let k = prefix ^ key in
+    let lab = label ~a:[a_label_for k; a_class label_class] [txt key] in
+    let inp =
+      let typ = a_input_type `Text in
+      let default = a_value (Yojson.Safe.to_string value) in
+      input ~a:[a_id k; a_name k; a_class input_class; typ; default] ()
+    in
+    div ~a:[a_class div_class] [lab; inp]
+  in
+  let open Yojson.Safe in
+  match from_string json |> Util.to_assoc with
+  | pairs -> List.map create_div pairs |> Result.ok
+  | exception _ -> Result.error "Invalid json"
+
+let pairs_to_yojson pairs =
+  let f (k,v) = (k, Yojson.Safe.from_string v) in
+  match List.map f pairs with
+  | lst -> `Assoc lst |> Result.ok
+  | exception _ -> Result.error "Invalid json"
+
+
+let show_context_form history active =
+  let rec partition_list n acc = function
+    | [] -> List.rev acc, []
+    | h :: tl -> match List.length acc < n with
+      | true -> partition_list n (h :: acc) tl
+      | false -> List.rev acc, h :: tl
+  in
+  let get_context id ev = let open Event in match ev.body with
+  | Context ctx -> if ctx.id = id then Some ctx else None
+  | _ -> None
+  in
+  let container = Dom_html.getElementById_exn "context-form-container" in
+  let f = function
+  | None -> ()
+  | Some id ->
+    let ctx = List.filter_map (get_context id) (S.value history) |> List.hd in
+    let label_class = ["context-label"] in
+    let input_class = ["context-input"] in
+    let div_class = ["context-entry"] in
+    let entries = Context.to_json ctx
+      |> json_to_tyxml_entries ~label_class ~input_class ~div_class
+      |> Result.map List.tl
+    in
+    match entries with
+    | Error err -> prerr_endline ("Failed to parse context json: " ^ err)
+    | Ok entries -> let open Tyxml_js.Html in
+      let len = (List.length entries + 1) / 2 in
+      let l1, l2 = partition_list len [] entries in
+      let inner =
+        let id = a_id "context-form-inner-container" in
+        let cl = a_class ["container"] in
+        div ~a:[id; cl] [ div l1; div l2]
+      in
+      let submit =
+        let id = a_id "context-submit-button" in
+        let cl = a_class ["button"] in
+        let value = a_value "submit" in
+        div ~a:[a_class ["justify-right"]]
+          [input ~a:[id; cl; value; a_input_type `Submit] ()]
+      in
+      let form =
+        let id = a_id "context-form" in
+        let action = a_action "/api/submit-context" in
+        let meth = a_method `Post in
+        form ~a:[id; action; meth] [inner; submit]
+      in
+      let el = Tyxml_js.To_dom.of_form form in
+      match Dom.list_of_nodeList container##.childNodes with
+      | [] -> Dom.appendChild container el
+      | c :: _ -> Dom.replaceChild container el c
+  in
+  f (S.value active);
+  E.map f (S.changes active) |> E.keep
+
+let init_context_tab event history =
+  print_endline "Context tab initialized";
+  let active, set_active = S.create None in
+  let context_list = Dom_html.getElementById_exn "context-list" in
+  let insert ev = let open Event in match ev.body with
+  | Context ctx ->
+    insert_context_entry context_list active set_active ev.id ev.time ctx
+  | _ -> ()
+  in
+  List.iter insert (S.value history |> List.rev);
+  E.keep (E.map insert event);
+  show_context_form history active
+
+
+(* script for the menu bar *)
 
 let init_tabs () =
   let keys = ["events"; "context"; "contests"; "model"; "clients"] in
@@ -251,15 +447,22 @@ let init_connection_status status =
   set_status_msg (S.value status);
   E.map set_status_msg (S.changes status) |> E.keep
 
-(* run the javascript for the menu and all tabs *)
+
+(* run javascript for the menu and all tabs *)
 
 let () =
   let promise =
+
+    let* () = Lwt_js_events.domContentLoaded () in
+    print_endline "here I am 1";
     let* event, history = init_event_polling "/api/events" "/api/event-stream" in
+    print_endline "here I am 2";
     let* status = init_status_polling "/api/status" "/api/status-stream" in
+    print_endline "here I am 3";
     let () = init_connection_status status in
     let () = init_tabs () in
     let () = init_events_tab event history in
+    let () = init_context_tab event history in
     fst (Lwt.wait ())
   in
   ignore_result promise

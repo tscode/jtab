@@ -97,6 +97,17 @@ let event ?(time=time ()) ?(id=(-1)) body = {time; id; body}
 let parse str =
   Yojson.Safe.from_string str |> of_yojson
 
+let parse_events strs =
+  let f str =
+    Yojson.Safe.from_string str
+    |> of_yojson
+    |> Result.get_ok
+  in
+  try Ok (List.map f strs)
+  with exn ->
+    let exs = Printexc.to_string exn in
+    Error (Printf.sprintf "could not parse event list: %s" exs) 
+  
 let parse_event_list str =
   Yojson.Safe.from_string str |> event_list_of_yojson
 
@@ -111,14 +122,14 @@ let time ev = ev.time
 let info ev = ev.body |> body_to_yojson |> Yojson.Safe.pretty_to_string
 
 let summary ev = let open Printf in match ev.body with
-  | Era era        -> sprintf "Era %d (%s) ended" era.number era.name
-  | Epoch ep       -> sprintf "Epoch %d finished" ep.number
-  | Data d         -> sprintf "Dataset received (%s)" d.client
-  | Datareq dr     -> sprintf "Data request %d emitted" dr.reqid
-  | Contest c      -> sprintf "Contest received (%s)" c.client
-  | Contestreq cr  -> sprintf "Contest request %d emitted" cr.reqid
-  | Context ctx -> sprintf "Context update (%s)" ctx.msg
+  | Era era       -> sprintf "Era %d ended" era.number
+  | Epoch ep      -> sprintf "Epoch %d ended" ep.number
+  | Data _        -> sprintf "Dataset received"
+  | Datareq dr    -> sprintf "Data request %d submitted" dr.reqid
+  | Contest _     -> sprintf "Contest results received"
+  | Contestreq cr -> sprintf "Contest request %d submitted" cr.reqid
+  | Context _     -> sprintf "Context update"
   | Client c -> match c.disconnect with
-    | true -> sprintf "Client %s disconnected" c.name
-    | false -> sprintf "Client %s connected" c.name
+    | true -> sprintf "Logoff: %s" c.name
+    | false -> sprintf "Login: %s" c.name
 

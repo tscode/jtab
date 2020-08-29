@@ -7,6 +7,6 @@
 (executable
   (name client)
   (modes js)
-  (modules client)
+  (modules client uplot)
   (libraries jtable lwt lwt_react js_of_ocaml-lwt js_of_ocaml-tyxml)
   (preprocess (pps js_of_ocaml-ppx)))

@@ -37,7 +37,9 @@ let connect_train_server set_status push_event ctx ip port =
   let connect () =
     let* (ic, oc) = Lwt_io.open_connection addr in
     change_status true;
-    Lwt.pick [receive_events change_status push_event ic; send_context ctx oc]
+    Lwt.pick
+      [ receive_events change_status push_event ic
+      ; send_context ctx oc ]
   in
   let rec handle_exception exn = let open Printf in
     let msg = match exn with
@@ -76,24 +78,30 @@ let register_page (uri, fpage) =
     let headers = headers "text/html" in
     `Html (fpage version) |> respond' ~headers)
 
-let register_js path =
-  get Web.js_uri (fun _req ->
-    let headers = headers "application/javascript" in
-    `String (Web.js_content path) |> respond' ~headers)
-    
-let serve_webpage port jspath _set_ctx status event =
+let register_file (uri, path, mime) =
+  get uri (fun _req ->
+    let headers = headers mime in
+    `String (Web.file_content path) |> respond' ~headers)
+
+let register_context_update set_ctx uri =
+  post uri (fun req ->
+    let+ pairs = App.urlencoded_pairs_of_body req in
+    Web.update_context set_ctx pairs;
+    Response.create ~code:(`Code 204) ())
+
+let serve_webpage port set_ctx status event =
   let history = S.fold (fun l e -> e :: l) [] event in
   let server () = App.empty
   |> App.port port
   |> List.fold_right (register_stream status event) Web.api_stream
   |> List.fold_right (register_static status history) Web.api_static
+  |> List.fold_right (register_file) Web.files
   |> List.fold_right (register_page) Web.pages
-  |> register_js jspath
+  |> register_context_update set_ctx Web.api_context
   |> App.start in
   Lwt.async server;
   Printf.printf "Webserver listens at localhost:%d\n" port;
   fst (Lwt.wait ())
-
 
 (* Main program *)
 
@@ -102,17 +110,16 @@ open Lwt_react
 let main ?(ip=ip)
          ?(port=port)
          ?(webport=webport) 
-         ?(jspath = "_build/default/bin/client.bc.js")
          ?(_token="") () =
 
   (* Reactive signals and events *)
   let status, set_status = S.create (Status.make ~ip ~port false) in
   let event, push_event = E.create () in
   let ctx, set_ctx = E.create () in
-  let webserver = serve_webpage webport jspath set_ctx status event in
+  let webserver = serve_webpage webport set_ctx status event in
   let trainserver = connect_train_server set_status push_event ctx ip port in
   Debug.log_status_events status event;
-  List.iter push_event Debug.test_events;
+  List.iter push_event (Debug.test_events 10);
   Lwt.pick [webserver; trainserver]
 
 let () = Lwt_main.run @@ main ()
