@@ -29,8 +29,8 @@ type t = {
   ; msg : string (* additional message, like source of context change *)
 } [@@deriving yojson]
 
-let dummy = {
-    id = 0
+let dummy id = {
+    id
   ; name = "dummy-context"
   ; power = 50
   ; temperature = 1.

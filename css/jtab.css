@@ -20,7 +20,7 @@
     margin-top: 2ex;
   }
 
-  div#tab-context {
+  .tab {
     display: flex;
     flex-direction: row;
     justify-content: center;
@@ -99,32 +99,6 @@
     color: #666;
   }
 
-  ul#event-list {
-    width: 100%
-    min-height: 200px;
-    max-height: 400px; /* TODO */
-    overflow: auto;
-  }
-
-  .event-list-entry, .context-list-entry {
-    cursor: pointer;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: monospace;
-    padding: 0px 1.25em;
-    border-radius: 4px;
-    max-width: 100%;
-  }
-
-  .event-list-entry:hover, .context-list-entry:hover {
-    background-color: #eef7ff;
-  }
-
-  .event-list-entry.active, .context-list-entry.active {
-    background-color: #ddecf9;
-  }
-
   .hidden {
     display: none !important;
   }
@@ -178,20 +152,11 @@
     color: #080
   }
 
-  #tab-events {
-    display: flex;
-    flex-direction: row;
-    justify-content: center;
-    margin: 0px 3%;
-    height: 100%;
-  }
-
-
   .column {
     margin: 0px 1em;
   }
 
-  #event-list-column {
+  #events-table-column {
     width: 22em;
   }
 
@@ -206,6 +171,7 @@
 
   button.menu-tab {
     padding: 1ex 1em;
+    height: 100%;
   }
 
   #menu-connection-status {
@@ -217,11 +183,6 @@
 
   #menu-connection-status.connected {
     color: green;
-  }
-
-  div#event-list-selectors {
-    display: grid;
-    grid-template-columns: 33% 33% 33%;
   }
 
   .container {
@@ -236,21 +197,119 @@
     text-align: center;
   }
 
-  .event-time, .context-time {
-    color: #060;
-    padding-right: 1em;
-    font-weight: bold;
+
+  /* EVENTS TABLES */
+
+  table.event-table {
+    font-family: monospace;
+    font-size: normal;
+    border-collapse: collapse;
+    overflow-y: auto;
+    display: block;
   }
 
-  .event-number {
-    color: #555;
+  tr.event-table-row {
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0px 1.25em;
+    border-radius: 4px;
+  }
+
+  td.event-table-index {
+    color: #777;
     font-weight: bold;
     padding-right: 0.5em;
+    padding-left: 1em;
   }
 
-  .event-summary, .context-summary {
-    color: #333333;
+  td.event-table-time {
+    color: #162;
+    padding-right: 0.5em;
+    font-weight: bold;
   }
+
+  td.event-table-content {
+    color: #333;
+    padding-right: 1em;
+  }
+
+  tr.event-table-row:hover {
+    background-color: #eef7ff;
+  }
+
+  tr.event-table-row.active {
+    background-color: #ddecf9;
+  }
+
+  div#events-table-selectors {
+    display: grid;
+    grid-template-columns: 33% 33% 33%;
+  }
+
+  table#events-event-table {
+    max-height: 400px;
+  }
+  table#context-event-table {
+    max-height: 600px;
+  }
+  table#contests-event-table {
+    max-height: 600px;
+  }
+
+
+  /* Contests ranking table */
+
+  table#contests-results-table {
+    font-family: monospace;
+    border-collapse: collapse;
+  }
+
+  table#contest-results-meta-table {
+    margin-top: 2.5ex;
+    font-family: monospace;
+    border-collapse: collapse;
+  }
+
+  table#contests-matches-table {
+    font-family: monospace;
+    text-align: center;
+    border-collapse: collapse;
+  }
+
+  td.contests-first-row {
+    border-bottom: 2px solid #777;
+  }
+
+  td.contests-first-col {
+    border-right: 2px solid #777;
+  }
+
+  td.contests-matches-index {
+    font-weight: bold;
+    color: #777;
+    width: 2em;
+    height: 2em;
+  }
+
+  .contests-matches-entry {
+/*    border-radius: 5px; */
+    font-weight: bold;
+  }
+
+  .positive {
+    color: green;
+  }
+
+  .negative {
+    color: red;
+  }
+
+  .neutral {
+    color: #777;
+  }
+
 
   pre#event-details {
     margin: 0px 0px;
@@ -262,10 +321,6 @@
   #event-progress-select {
   }
 
-
-
-
-
   .u-legend {
     font-size: small;
     margin-top: -3ex;
@@ -275,16 +330,22 @@
 
   .u-label {
     font-weight: normal;
+    padding-bottom: 0.32ex;
   }
 
   div.u-marker {
     width: 1.0em !important;
     height: 0.5em !important;
-    margin-right: 0.5em !important;
+    margin-right: 0.35em !important;
+    border: 3px solid transparent; 
   }
 
   select option {
     background: white;
+  }
+
+  .u-inline.u-live th::after {
+    content: "" !important;
   }
 
 

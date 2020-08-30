@@ -16,7 +16,7 @@ open Lwt_react
 (* Stream API *)
 
 let event_stream _ event =
-  let f ev = Event.event_list_to_json [ev] in
+  let f ev = Event.events_to_string [ev] in
   E.map f event |> E.next
 
 let status_stream status _ =
@@ -30,19 +30,7 @@ let api_stream =
 (* Static API *)
 
 let events_static _ history =
-  let len = (List.length history) * 200 in
-  let buf = Buffer.create len in
-  let add_sep () = Buffer.add_char buf '\n' in
-  let add_event ev =
-    let str = Event.to_yojson ev |> Yojson.Safe.to_string in
-    Buffer.add_string buf str
-  in
-  match history with
-  | [] -> ""
-  | h :: tl ->
-    add_event h;
-    List.iter (fun ev -> add_sep (); add_event ev) tl;
-    Buffer.contents buf
+  Event.events_to_string history
 
 let status_static status _ =
   S.value status |> Status.to_json
@@ -90,15 +78,15 @@ let events_tab = let open Html in
   (* first column *)
   let event_list =
     let selectors = 
-      let id = a_id "event-list-selectors" in
+      let id = a_id "events-table-selectors" in
       let cl = a_class ["event-selector"; "active"] in
       div ~a:[id]
-      [ button ~a:[cl; a_id "event-list-select-epochs"]   [txt "epochs"]
-      ; button ~a:[cl; a_id "event-list-select-eras"]     [txt "eras"]
-      ; button ~a:[cl; a_id "event-list-select-data"]     [txt "data"]
-      ; button ~a:[cl; a_id "event-list-select-contests"] [txt "contests"]
-      ; button ~a:[cl; a_id "event-list-select-context"]  [txt "context"]
-      ; button ~a:[cl; a_id "event-list-select-clients"]  [txt "clients"] ]
+      [ button ~a:[cl; a_id "events-table-select-epochs"]   [txt "epochs"]
+      ; button ~a:[cl; a_id "events-table-select-eras"]     [txt "eras"]
+      ; button ~a:[cl; a_id "events-table-select-data"]     [txt "data"]
+      ; button ~a:[cl; a_id "events-table-select-contests"] [txt "contests"]
+      ; button ~a:[cl; a_id "events-table-select-context"]  [txt "context"]
+      ; button ~a:[cl; a_id "events-table-select-clients"]  [txt "clients"] ]
     in
     let search =
       let id = "event-search" in
@@ -111,11 +99,17 @@ let events_tab = let open Html in
     in
     let list =
       let title = div ~a:[a_class ["title"]] [txt "history"] in
-      let container = div ~a:[a_class ["container"]]
-        [ ul ~a:[a_id "event-list"; a_class ["no-bullets"]] [] ] in
+      let container =
+        let tab =
+          let id = a_id "events-event-table" in
+          let cl = a_class ["event-table"] in
+          table ~a:[id; cl] [] in
+        let cl = a_class ["container"] in
+        div ~a:[cl] [tab]
+      in
       div [title; container]
     in
-    let id = a_id "event-list-column" in
+    let id = a_id "events-table-column" in
     let cl = a_class ["column"] in
     div ~a:[id; cl] [filter; list]
 
@@ -163,9 +157,14 @@ let context_tab = let open Html in
   (* first column *)
   let context_list =
     let title = div ~a:[a_class ["title"]] [txt "contexts"] in
-    let container = div ~a:[a_class ["container"]]
-      [ ul ~a:[a_id "context-list"; a_class ["no-bullets"]] [] ] in
-    let id = a_id "context-list-column" in
+    let container =
+      let tab =
+        let id = a_id "context-event-table" in
+        let cl = a_class ["event-table"] in
+        table ~a:[id; cl] [] in
+      div ~a:[a_class ["container"]] [ tab ]
+    in
+    let id = a_id "context-table-column" in
     let cl = a_class ["column"] in
     div ~a:[id; cl] [title; container]
 
@@ -185,10 +184,62 @@ let context_tab = let open Html in
   let cl = a_class ["tab"; "hidden"] in
   div ~a:[id; cl] [ context_list; context_form ]
 
+
+(* Contests tab *)
+
 let contests_tab = let open Html in
+
+  (* first column *)
+  let contests_list =
+    let title = div ~a:[a_class ["title"]] [txt "contests"] in
+    let container =
+      let tab =
+        let id = a_id "contests-event-table" in
+        let cl = a_class ["event-table"] in
+        table ~a:[id; cl] [] in
+      div ~a:[a_class ["container"]] [ tab ]
+    in
+    let id = a_id "contests-list-column" in
+    let cl = a_class ["column"] in
+    div ~a:[id; cl] [title; container]
+
+  in
+
+  (* second column *)
+  let contests_results =
+    let title = div ~a:[a_class ["title"]] [txt "results"] in
+    let container =
+      let cl = a_class ["container"] in
+      let id = a_id "contests-results-container" in
+      div ~a:[id; cl] []
+    in
+    let id = a_id "contests-results-column" in
+    let cl = a_class ["column"] in
+    div ~a:[id; cl] [title; container]
+
+  in
+
+  (* third column *)
+  let contests_matches =
+    let title = div ~a:[a_class ["title"]] [txt "matches"] in
+    let container =
+      let tab =
+        let id = a_id "contests-matches-table" in
+        table ~a:[id] [] in
+      let cl = a_class ["container"] in
+      let id = a_id "contests-matches-container" in
+      div ~a:[id; cl] [tab]
+    in
+    let id = a_id "contests-matches-column" in
+    let cl = a_class ["column"] in
+    div ~a:[id; cl] [title; container]
+
+  in
+
   let id = a_id "tab-contests" in
   let cl = a_class ["tab"; "hidden"] in
-  div ~a:[id; cl] [ txt "TODO" ]
+  div ~a:[id; cl] [ contests_list; contests_results; contests_matches ]
+
 
 let model_tab = let open Html in
   let id = a_id "tab-model" in

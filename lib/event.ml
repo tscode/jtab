@@ -26,16 +26,6 @@ type contestreq = {
     reqid : int
 } [@@deriving yojson]
 
-type contest = {
-    client : string
-  ; names : string list
-  ; matches : int
-  ; results : int list list
-  ; elo : float list
-  ; draw : float
-  ; sadv : float
-} [@@deriving yojson]
-
 type datareq = {
     reqid : int
   ; ctxid : int
@@ -61,7 +51,7 @@ type body =
   | Epoch of epoch
   | Data of data
   | Datareq of datareq
-  | Contest of contest
+  | Contest of Contest.t
   | Contestreq of contestreq
   | Client of client
   | Context of Context.t (* source of the context change *)
@@ -90,32 +80,40 @@ type t =
   ; body : body }
   [@@deriving yojson]
 
-type event_list = t list [@@deriving yojson]
-
 let event ?(time=time ()) ?(id=(-1)) body = {time; id; body}
 
 let parse str =
   Yojson.Safe.from_string str |> of_yojson
 
-let parse_events strs =
-  let f str =
-    Yojson.Safe.from_string str
+let parse_events str =
+  let f s =
+    Yojson.Safe.from_string s
     |> of_yojson
     |> Result.get_ok
   in
-  try Ok (List.map f strs)
+  try Ok (List.map f (String.split_on_char '\n' str))
   with exn ->
     let exs = Printexc.to_string exn in
     Error (Printf.sprintf "could not parse event list: %s" exs) 
+
+let events_to_string events =
+  let len = (List.length events) * 200 in
+  let buf = Buffer.create len in
+  let add_sep () = Buffer.add_char buf '\n' in
+  let add_event ev =
+    let str = to_yojson ev |> Yojson.Safe.to_string in
+    Buffer.add_string buf str
+  in
+  match events with
+  | [] -> ""
+  | h :: tl ->
+    add_event h;
+    List.iter (fun ev -> add_sep (); add_event ev) tl;
+    Buffer.contents buf
   
-let parse_event_list str =
-  Yojson.Safe.from_string str |> event_list_of_yojson
 
 let to_json ev =
   to_yojson ev |> Yojson.Safe.to_string
-
-let event_list_to_json evs =
-  event_list_to_yojson evs |> Yojson.Safe.to_string
 
 let time ev = ev.time
 

@@ -119,7 +119,7 @@ let main ?(ip=ip)
   let webserver = serve_webpage webport set_ctx status event in
   let trainserver = connect_train_server set_status push_event ctx ip port in
   Debug.log_status_events status event;
-  List.iter push_event (Debug.test_events 10);
+  List.iter push_event (Debug.test_events 50);
   Lwt.pick [webserver; trainserver]
 
 let () = Lwt_main.run @@ main ()

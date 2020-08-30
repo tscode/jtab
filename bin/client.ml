@@ -44,7 +44,7 @@ let rec init_status_polling uri_static uri_stream =
 
 let rec poll_events uri set_history history =
   let* response = get_xml uri in
-  match Result.bind response Event.parse_event_list with
+  match Result.bind response Event.parse_events with
   | Ok events ->
     List.iter (fun ev -> set_history (ev :: S.value history)) events;
     poll_events uri set_history history
@@ -52,21 +52,60 @@ let rec poll_events uri set_history history =
 
 let init_event_polling uri_static uri_stream =
   let+ prior_events =
-    print_endline "here 1";
     let+ response = get_xml uri_static in
-    let parse str = String.split_on_char '\n' str |> Event.parse_events in
-    print_endline "here 2";
-    match Result.bind response parse with
+    match Result.bind response Event.parse_events with
     | Ok events -> events
     | Error msg -> prerr_endline msg; []
   in
-  print_endline "here 3";
   let history, set = S.create prior_events in
-  print_endline "here 4";
   let event = E.map List.hd (S.changes history) in
-  print_endline "here 5";
   ignore_result (poll_events uri_stream set history);
   event, history
+
+
+(* auxiliary function for displaying tables of events with
+ * columns id | time | content *)
+
+
+let remove_children el =
+  let children = el##.childNodes |> Dom.list_of_nodeList in
+  List.iter (Dom.removeChild el) children
+
+let prepend_child el child =
+  Dom.insertBefore el child (el##.firstChild)
+
+let insert_event_row table active set id_conv text ev =
+  let open Event in
+  let row = let open Tyxml_js.Html in
+    let index =
+      let cl = a_class ["event-table-index"] in
+      td ~a:[cl] [ev.id |> Int.to_string |> txt] in
+    let time =
+      let cl = a_class ["event-table-time"] in
+      td ~a:[cl] [Event.time_to_string ev.time |> txt] in
+    let content =
+      let cl = a_class ["event-table-content"] in
+      td ~a:[cl] [text |> txt] in
+    let id = a_id (id_conv ev.id) in
+    let cl = a_class ["event-table-row"] in
+    tr ~a:[id; cl] [index; time; content]
+    |> Tyxml_js.To_dom.of_tr
+  in
+  let handle _ =
+    let () = match S.value active with
+    | None -> ()
+    | Some index ->
+      let active_row = Dom_html.getElementById_exn (id_conv index) in
+      active_row##.classList##remove (Js.string "active");
+    in
+    row##.classList##add (Js.string "active");
+    (* pick up changes even when active element is selected *)
+    set None; set (Some ev.id); Js._true
+  in
+  row##.onclick := Dom_html.handler handle;
+  handle () |> ignore;
+  prepend_child table row;
+  row
 
 
 (* script for the EVENTS tab *)
@@ -97,7 +136,7 @@ let event_selector () =
   in
   let connect_button (id, id') =
     let signal, set = S.create (Some id') in
-    let button = Dom_html.getElementById_exn ("event-list-select-" ^ id) in
+    let button = Dom_html.getElementById_exn ("events-table-select-" ^ id) in
     let handle _ =
       set (match (S.value signal) with None -> Some id' | Some _ -> None);
       button##.classList##toggle (Js.string "active")
@@ -128,62 +167,23 @@ let match_search ev = function
 let is_visible (searchstring, selection) ev =
   List.exists (match_selector ev) selection && match_search ev searchstring
 
-let summary_entry_tyxml ev =
-  let open Event in
-  let open Tyxml_js.Html in
-  let time =
-    let a = [a_class ["event-time"]] in
-    span ~a [Event.time_to_string ev.time |> txt] in
-  let number =
-    let a = [a_class ["event-number"]] in
-    span ~a [Printf.sprintf "%d" ev.id |> txt] in
-  let text =
-    let a = [a_class ["event-summary"]] in
-    span ~a [Event.summary ev |> txt] in
-  let id = Printf.sprintf "event:%d" ev.Event.id |> a_id in
-  let cl = ["event-list-entry"] |> a_class in
-  li ~a:[id; cl] [number; time; text]
-
-let prependChild el child =
-  Dom.insertBefore el child (el##.firstChild)
-
-let insert_summary_entry summary_list active set_active filter ev =
-  let entry = summary_entry_tyxml ev |> Tyxml_js.To_dom.of_li in
-  let handle _ =
-    let () = match S.value active with
-    | None -> ()
-    | Some index ->
-      let id = Printf.sprintf "event:%d" index in
-      let active_entry = Dom_html.getElementById_exn id in
-      active_entry##.classList##remove (Js.string "active");
-    in
-    entry##.classList##add (Js.string "active");
-    set_active (Some ev.id);
-    Js._true
-  in
-  entry##.onclick := Dom_html.handler handle;
-  handle () |> ignore;
-  if not (is_visible (S.value filter) ev)
-  then entry##.classList##add (Js.string "hidden");
-  prependChild summary_list entry
-
-let connect_filter summary_list history filter =
+let connect_filter table history filter =
   let display crit =
     let hist = S.value history in
-    let dom_hist = summary_list##.childNodes |> Dom.list_of_nodeList in
-    let f ev li =
-      let li = Dom.CoerceTo.element li
+    let dom_hist = table##.childNodes |> Dom.list_of_nodeList in
+    let f ev row =
+      let tr = Dom.CoerceTo.element row
       |> Js.Opt.to_option
       |> Option.get
       |> Dom_html.element
       in
       match is_visible crit ev with
-      | true -> li##.classList##remove (Js.string "hidden")
-      | false -> li##.classList##add (Js.string "hidden")
+      | true -> tr##.classList##remove (Js.string "hidden")
+      | false -> tr##.classList##add (Js.string "hidden")
     in
     List.iter2 f hist dom_hist
   in
-  E.keep (E.map display (S.changes filter))
+  E.map display (S.changes filter) |> E.keep
 
 let show_details history active =
   let pre = Dom_html.getElementById_exn "event-details" in
@@ -217,12 +217,16 @@ let render_loss_graph id history =
   in
   let train, test = List.filter_map epoch_loss history |> List.split in
   let render title ls =
-    Uplot.empty ~width:500 ~height:250 ~title ()
+    Uplot.empty ~width:550 ~height:250 ~title ()
     |> Uplot.time ~label:"epoch"
-    |> Uplot.series ~stroke:"#888888" ~label:"f" ~data:(List.map (fun x -> x.feature) ls)
-    |> Uplot.series ~stroke:"#224488" ~label:"p" ~data:(List.map (fun x -> x.policy) ls)
-    |> Uplot.series ~stroke:"#228844" ~label:"v" ~data:(List.map (fun x -> x.value) ls)
-    |> Uplot.series ~width:2. ~stroke:"#cc8844" ~label:"t" ~data:(List.map (fun x -> x.total) ls)
+    |> Uplot.series
+       ~stroke:"#888888" ~label:"f" ~data:(List.map (fun x -> x.feature) ls)
+    |> Uplot.series
+       ~stroke:"#224488" ~label:"p" ~data:(List.map (fun x -> x.policy) ls)
+    |> Uplot.series
+       ~stroke:"#228844" ~label:"v" ~data:(List.map (fun x -> x.value) ls)
+    |> Uplot.series ~width:2.
+       ~stroke:"#cc8844" ~label:"t" ~data:(List.map (fun x -> x.total) ls)
     |> Uplot.render id
   in
   render "train" train;
@@ -235,16 +239,10 @@ let render_quality_graph id history =
   | _ -> None
   in
   let data = List.filter_map epoch_quality history in
-  Uplot.empty ~width:500 ~height:250 ()
+  Uplot.empty ~width:550 ~height:250 ()
   |> Uplot.time ~label:"epoch"
   |> Uplot.series ~label:"quality" ~data
   |> Uplot.render id
-
-let clear_graph_div id =
-  let div = Dom_html.getElementById_exn id in
-  let children = div##.childNodes |> Dom.list_of_nodeList in
-  List.iter (Dom.removeChild div) children
-
 
 let show_progress_graph history =
   let id = "event-progress-graph" in
@@ -256,7 +254,7 @@ let show_progress_graph history =
     let handle _ = set (el##.value |> Js.to_string); Js._true in
     el##.onchange := Dom.handler handle;
     let f _ =
-      clear_graph_div id;
+      remove_children (Dom_html.getElementById_exn id);
       match S.value selected with
       | "loss" -> render_loss_graph id (S.value history)
       | "quality" -> render_quality_graph id (S.value history)
@@ -267,57 +265,136 @@ let show_progress_graph history =
     E.map f (S.changes selected) |> E.keep;
     E.map f (S.changes history) |> E.keep
 
-
 let init_events_tab event history =
   let search = event_searchstring () in
   let selector = event_selector () in
   let filter = S.Pair.pair search selector in
-  let active, set_active = S.create None in
-  let summary_list = Dom_html.getElementById_exn "event-list" in
+  let active, set = S.create None in
+  let table = Dom_html.getElementById_exn "events-event-table" in
   let insert ev =
-    insert_summary_entry summary_list active set_active filter ev
+    let id n = "event:" ^ Int.to_string n in
+    let content = Event.summary ev in
+    let row = insert_event_row table active set id content ev in
+    if not (is_visible (S.value filter) ev)
+    then row##.classList##add (Js.string "hidden")
   in
   List.iter insert (S.value history |> List.rev);
   E.keep (E.map insert event);
-  connect_filter summary_list history filter;
+  connect_filter table history filter;
   show_details history active;
   show_progress_graph history
 
 
-(* script for the CONTEXT tab *)
+(* script for the CONTESTS tab *)
 
-let insert_context_entry context_list active set_active n t ctx =
-  let id_str id = Printf.sprintf "context:%d" id in
-  let entry = let open Tyxml_js.Html in
-    let time =
-      let a = [a_class ["event-time"]] in
-      span ~a [Event.time_to_string t |> txt] in
-    let number =
-      let a = [a_class ["event-number"]] in
-      span ~a [Printf.sprintf "%d" n |> txt] in
-    let text =
-      let a = [a_class ["event-summary"]] in
-      span ~a [Printf.sprintf "context %d" ctx.Context.id |> txt] in
-    let cl = a_class ["context-list-entry"] in
-    let id = a_id (id_str ctx.Context.id) in
-    li ~a:[id; cl] [number; time; text] |> Tyxml_js.To_dom.of_li
+let get_contest index ev = let open Event in match ev.body with
+  | Contest c -> if index = ev.id then Some c else None
+  | _ -> None
+
+let ranking_row rank (name, elo) = let open Tyxml_js.Html in
+  tr ~a:[a_class ["contests-results-row"]]
+  [ td ~a:[a_class ["event-table-index"]] [Int.to_string (rank+1) ^ "." |> txt]
+  ; td ~a:[a_class ["event-table-time"]] [Printf.sprintf "%.0f" elo |> txt]
+  ; td ~a:[a_class ["event-table-content"]] [name |> txt] ]
+
+let ranking_table (c : Contest.t) =
+  let rows = List.mapi ranking_row (List.combine c.names c.elo) in
+  Tyxml_js.Html.(table ~a:[a_id "contests-results-table"] rows)
+
+let meta_table (c : Contest.t) = let open Tyxml_js.Html in
+  let cl_key = a_class ["event-table-index"] in
+  let cl_val = a_class ["event-table-time"] in
+  let matches =
+    let key = td ~a:[cl_key] ["matches" |> txt] in
+    let value = td ~a:[cl_val] [c.matches |> Int.to_string |> txt] in
+    tr [key; value] in
+  let sadv =
+    let key = td ~a:[cl_key] ["start adv." |> txt] in
+    let value = td ~a:[cl_val] [c.sadv |> Printf.sprintf "%.0f" |> txt] in
+    tr [key; value] in
+  let draw =
+    let key = td ~a:[cl_key] ["draw range" |> txt] in
+    let value = td ~a:[cl_val] [c.draw |> Printf.sprintf "%.0f" |> txt] in
+    tr [key; value]
   in
-  let handle _ =
-    let () = match S.value active with
-    | None -> ()
-    | Some index ->
-      let id = Printf.sprintf "context:%d" index in
-      let active_entry = Dom_html.getElementById_exn id in
-      active_entry##.classList##remove (Js.string "active");
+  table ~a:[a_id "contest-results-meta-table"] [ matches; sadv; draw]
+
+let show_results active history =
+  let div = Dom_html.getElementById_exn "contests-results-container" in
+  let update = function
+  | None -> ()
+  | Some index ->
+    let cs = List.filter_map (get_contest index) (S.value history) in
+    let c = List.hd cs |> Contest.sort in
+    let ranking_tab = ranking_table c |> Tyxml_js.To_dom.of_table in
+    let meta_tab = meta_table c |> Tyxml_js.To_dom.of_table in
+    remove_children div;
+    Dom.appendChild div ranking_tab;
+    Dom.appendChild div meta_tab
+  in
+  update (S.value active);
+  E.map update (S.changes active) |> E.keep
+
+let matches_table (c : Contest.t) = let open Tyxml_js.Html in
+  let len = List.length c.names in
+  let index_class cl = a_class ("contests-matches-index" :: cl) in
+  let index_row =
+    let indices =
+      let cl = index_class ["contests-first-row"] in
+      let f i = td ~a:[cl] [Int.to_string (i+1) |> txt] in
+      List.init len f in
+    let cl = index_class ["contests-first-row"; "contests-first-col"] in
+    tr (td ~a:[cl] [txt ""] :: indices)
+  in
+  let create_row i vals = 
+    let cl = index_class ["contests-first-col"] in
+    let sign = function
+    | v when v < 0 -> a_class ["contests-matches-entry"; "negative"]
+    | v when v > 0 -> a_class ["contests-matches-entry"; "positive"]
+    | _ -> a_class ["contests-matches-entry"; "neutral"]
     in
-    entry##.classList##add (Js.string "active");
-    set_active (None);
-    set_active (Some ctx.id);
-    Js._true
+    let f j v =
+      if i = j then td [] 
+      else td ~a:[sign v] [Int.abs v |> Int.to_string |> txt] in
+    let data = List.mapi f vals in
+    tr (td ~a:[cl] [Int.to_string (i+1) |> txt] :: data)
   in
-  entry##.onclick := Dom_html.handler handle;
-  handle () |> ignore;
-  prependChild context_list entry
+  let rows = index_row :: List.mapi create_row c.balance in
+  table ~a:[a_id "contests-matches-table"] rows
+
+
+let show_matches active history =
+  let div = Dom_html.getElementById_exn "contests-matches-container" in
+  let update = function
+  | None -> ()
+  | Some index ->
+    let cs = List.filter_map (get_contest index) (S.value history) in
+    let c = List.hd cs |> Contest.sort in
+    let tab = matches_table c |> Tyxml_js.To_dom.of_table in
+    remove_children div;
+    Dom.appendChild div tab
+  in
+  update (S.value active);
+  E.map update (S.changes active) |> E.keep
+
+
+let init_contests_tab event history =
+  let id_str n = "contest:" ^ Int.to_string n in
+  let active, set = S.create None in
+  let table = Dom_html.getElementById_exn "contests-event-table" in
+  let insert ev = let open Event in match ev.body with
+  | Contest c ->
+    let content = "contest of era " ^ Int.to_string c.era in
+    insert_event_row table active set id_str content ev |> ignore
+  | _ -> ()
+  in
+  List.iter insert (S.value history |> List.rev);
+  E.map insert event |> E.keep;
+  show_results active history;
+  show_matches active history
+
+
+(* script for the CONTEXT tab *)
 
 let json_to_tyxml_entries ?(label_class=[]) ?(input_class=[])
                           ?(div_class=[]) ?(prefix="") json =
@@ -352,7 +429,7 @@ let show_context_form history active =
       | false -> List.rev acc, h :: tl
   in
   let get_context id ev = let open Event in match ev.body with
-  | Context ctx -> if ctx.id = id then Some ctx else None
+  | Context ctx -> if ev.id = id then Some ctx else None
   | _ -> None
   in
   let container = Dom_html.getElementById_exn "context-form-container" in
@@ -399,16 +476,17 @@ let show_context_form history active =
   E.map f (S.changes active) |> E.keep
 
 let init_context_tab event history =
-  print_endline "Context tab initialized";
-  let active, set_active = S.create None in
-  let context_list = Dom_html.getElementById_exn "context-list" in
+  let active, set = S.create None in
+  let table = Dom_html.getElementById_exn "context-event-table" in
   let insert ev = let open Event in match ev.body with
   | Context ctx ->
-    insert_context_entry context_list active set_active ev.id ev.time ctx
+    let id n = "context:" ^ Int.to_string n in
+    let content = "context " ^ Int.to_string ctx.id in
+    insert_event_row table active set id content ev |> ignore
   | _ -> ()
   in
   List.iter insert (S.value history |> List.rev);
-  E.keep (E.map insert event);
+  E.map insert event |> E.keep;
   show_context_form history active
 
 
@@ -454,15 +532,13 @@ let () =
   let promise =
 
     let* () = Lwt_js_events.domContentLoaded () in
-    print_endline "here I am 1";
     let* event, history = init_event_polling "/api/events" "/api/event-stream" in
-    print_endline "here I am 2";
     let* status = init_status_polling "/api/status" "/api/status-stream" in
-    print_endline "here I am 3";
     let () = init_connection_status status in
     let () = init_tabs () in
     let () = init_events_tab event history in
     let () = init_context_tab event history in
+    let () = init_contests_tab event history in
     fst (Lwt.wait ())
   in
   ignore_result promise
