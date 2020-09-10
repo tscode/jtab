@@ -83,7 +83,8 @@ type t =
 let event ?(time=time ()) ?(id=(-1)) body = {time; id; body}
 
 let parse str =
-  Yojson.Safe.from_string str |> of_yojson
+  try Yojson.Safe.from_string str |> of_yojson with
+  | Yojson.Json_error msg -> Error msg
 
 let parse_events str =
   let f s =
@@ -131,3 +132,15 @@ let summary ev = let open Printf in match ev.body with
     | true -> sprintf "Logoff: %s" c.name
     | false -> sprintf "Login: %s" c.name
 
+let has_id id ev = (ev.id = id)
+let latest_id = function [] -> 0 | h :: _ -> h.id
+
+let take_later_than id history =
+  let rec f acc = function
+  | [] -> acc
+  | h :: t -> if h.id = id then acc else f (h :: acc) t in
+  List.rev (f [] history)
+
+let latest = function
+  | [] -> None
+  | h :: _ -> Some h

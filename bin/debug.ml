@@ -2,9 +2,14 @@ open Jtable
 
 open Lwt_react
 
-let log_status_events status event =
-  let status = S.changes status in
-  E.map (fun st -> print_endline (Status.to_json st)) status |> E.keep;
+let hd_opt = function
+  | [] -> None
+  | h :: _ -> Some h
+
+let log_status_events _status history =
+  let event = E.fmap hd_opt (S.changes history) in
+ (* let status = S.changes status in
+  E.map (fun st -> print_endline (Msg.status_to_json st)) status |> E.keep;*)
   E.map (fun ev -> print_endline (Event.summary ev)) event |> E.keep
 
 let test_events n = let open Event in
@@ -34,4 +39,6 @@ let test_events n = let open Event in
   ; event ~id:(n+5) (Datareq {reqid = 42; ctxid = 14; era = "testera"})
   ; event ~id:(n+6) (Era {name = "testera"; number = 5; epoch = 1})
   ; event ~id:(n+7) (Contest (Contest.dummy ()))
-  ; event ~id:(n+8) (Contest (Contest.dummy () |> Contest.sort)) ]
+  ; event ~id:(n+8) (Contest (Contest.dummy () |> Contest.sort))
+  ; event ~id:(n+9) (Contest (Contest.dummy ())) ]
+  |> List.rev

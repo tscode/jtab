@@ -18,7 +18,7 @@ let dummy () =
   in
   { client = "best-contest-client"
   ; era = Random.int 20
-  ; names = ["mcts-1500"; "mcts-750"; "mcts-250"; "mcts-10"; "*model:15"]
+  ; names = ["mcts-1500"; "mcts-750"; "mcts-250"; "mcts-10"; "model*"]
   ; matches = (List.map sum balance |> sum) + Random.int 100
   ; balance
   ; elo = List.init 5 (fun _ -> Random.float 1500.)

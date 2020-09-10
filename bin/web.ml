@@ -11,45 +11,68 @@ let js =
 
 open Tyxml
 open Lwt_react
+open Lwt.Syntax
+
+let (>>) a b = let* _ = a in b
+let (>|) a b = let+ _ = a in b
 
 
 (* Stream API *)
 
-let event_stream _ event =
-  let f ev = Event.events_to_string [ev] in
-  E.map f event |> E.next
+let event_stream params _ event history =
+  let hist = S.value history in
+  let id = match params with
+  | [] -> Event.latest_id hist
+  | [id] -> int_of_string id
+  | _ -> assert false in
+  match Event.take_later_than id hist with
+  | [] -> let+ ev = E.next event in Event.events_to_string [ev]
+  | events -> Lwt.return (Event.events_to_string events)
 
-let status_stream status _ =
-  S.changes status |> E.map Status.to_json |> E.next
+let status_stream params status _ _ =
+  let s = S.value status in
+  let h = Msg.hash_status s in
+  let hash = match params with
+  | [] -> h
+  | [hash] -> int_of_string hash
+  | _ -> assert false in
+  match h = hash with
+  | true -> Lwt.map Msg.status_to_json (E.next (S.changes status))
+  | false -> Lwt.return (Msg.status_to_json s)
 
 let api_stream =
-  [ "/api/event-stream", event_stream
-  ; "/api/status-stream", status_stream ]
-
+  [ "/api/event-stream", event_stream, []
+  ; "/api/event-stream/:id", event_stream, ["id"]
+  ; "/api/status-stream", status_stream, []
+  ; "/api/status-stream/:hash", status_stream, ["hash"]]
 
 (* Static API *)
 
 let events_static _ history =
   Event.events_to_string history
 
+let history_static _ history =
+  Event.events_to_string (List.rev history)
+
 let status_static status _ =
-  S.value status |> Status.to_json
+  S.value status |> Msg.status_to_json
 
 let api_static =
   [ "/api/events", events_static
+  ; "/api/history", history_static
   ; "/api/status", status_static ]
 
 
 (* Set context via post *)
-let update_context set_ctx pairs =
+(*let update_context set_ctx pairs =
   let id = ("id", `Int (-1)) in
   let f (key, vals) = (key, Yojson.Safe.from_string (List.hd vals)) in
   let ctx = `Assoc (id :: List.map f pairs) |> Context.of_yojson in
   match ctx with
   | Ok c -> set_ctx c
-  | Error err -> prerr_endline err 
+  | Error err -> prerr_endline err *)
 
-let api_context = "/api/submit-context"
+let api_msg = "/api/msg"
 
 (* Serve files *)
 
@@ -76,7 +99,7 @@ let files =
 let events_tab = let open Html in
 
   (* first column *)
-  let event_list =
+  let event_table =
     let selectors = 
       let id = a_id "events-table-selectors" in
       let cl = a_class ["event-selector"; "active"] in
@@ -97,7 +120,7 @@ let events_tab = let open Html in
       let container = div ~a:[a_class ["container"]] [selectors; search] in
       div ~a:[a_id "event-filter"] [title; container]
     in
-    let list =
+    let table =
       let title = div ~a:[a_class ["title"]] [txt "history"] in
       let container =
         let tab =
@@ -109,9 +132,20 @@ let events_tab = let open Html in
       in
       div [title; container]
     in
+    let save_div =
+      let save =
+        let id = a_id "events-save-button" in
+        let cl = a_class ["button"] in
+        let dl = a_download (Some "history.txt") in
+        let hr = a_href "/api/history" in
+        a ~a:[hr; dl; id; cl] [txt "save"]
+      in
+      let id = a_id "events-history-buttons" in
+      div ~a:[id] [save]
+    in
     let id = a_id "events-table-column" in
     let cl = a_class ["column"] in
-    div ~a:[id; cl] [filter; list]
+    div ~a:[id; cl] [filter; table; save_div]
 
   in
 
@@ -146,8 +180,8 @@ let events_tab = let open Html in
   in
 
   let id = a_id "tab-events" in
-  let cl = a_class ["tab"] in
-  div ~a:[id; cl] [ event_list ; event_details ; event_progress ]
+  let cl = a_class ["tab"; "hidden"] in
+  div ~a:[id; cl] [ event_table ; event_details ; event_progress ]
 
 
 (* Context tab *)
@@ -251,6 +285,12 @@ let clients_tab = let open Html in
   let cl = a_class ["tab"; "hidden"] in
   div ~a:[id; cl] [ txt "TODO" ]
 
+let no_events_pseudo_tab = let open Html in
+  let title = div ~a:[a_class ["title"]] [txt "waiting for events..."] in
+  let id = a_id "tab-no-events" in
+  let cl = a_class ["tab"] in
+  div ~a:[id; cl] [ title ]
+
 let webpage version = let open Html in
   let head =
     let title = title (txt "Jtab - jtac table") in
@@ -281,7 +321,7 @@ let webpage version = let open Html in
   let status = span ~a:[a_id "menu-connection-status"; spanclass] [] in
   let menu = div ~a:[a_id "menu-bar"] (logo :: tabs :: [status]) in
   let body = body
-    [menu; events_tab; context_tab; contests_tab; model_tab; clients_tab]
+    [menu; no_events_pseudo_tab; events_tab; context_tab; contests_tab; model_tab; clients_tab]
   in
   Format.asprintf "%a" (pp ()) (html head body)
 

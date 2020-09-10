@@ -49,16 +49,21 @@ let derive_time_data t l =
 let series_length (s : series) = List.length s.data
 
 let inject = Js.Unsafe.inject
-let inject_data v = Array.of_list v |> Js.array |> inject
 let inject_array v = Js.array v |> inject
+let inject_data v = Array.of_list v |> inject_array
 let inject_string s = Js.string s |> inject
+
+let inject_series_data v =
+  let f x = match Float.is_nan x with
+  | true -> Js.null
+  | false -> Js.Opt.return x in
+  List.map f v |> Array.of_list |> inject_array
 
 let inject_opt v = Js.Opt.option v |> inject
 let inject_string_opt v = Option.map Js.string v |> Js.Opt.option |> inject
 
-
-let time_data t = inject_data t.data
-let series_data (s : series) = inject_data s.data
+let time_data t = inject_series_data t.data
+let series_data (s : series) = inject_series_data s.data
 
 let time_options t =
   [| "label", inject_string_opt t.label |]

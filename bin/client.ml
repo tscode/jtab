@@ -22,33 +22,36 @@ let get_xml uri =
 
 (* query the connection status *)
 
-let rec poll_status uri set =
-  let* response = get_xml uri in
-  match Result.bind response Status.of_json with
-  | Ok status -> set status; poll_status uri set
+let rec poll_status uri status set =
+  let hash = Msg.hash_status (S.value status) in
+  let uri' = Printf.sprintf "%s/%d" uri hash in
+  let* response = get_xml uri' in
+  match Result.bind response Msg.status_of_json with
+  | Ok s -> set s; poll_status uri status set
   | Error msg -> prerr_endline msg |> return
 
 let rec init_status_polling uri_static uri_stream =
   let+ status =
     let+ response = get_xml uri_static in
-    match Result.bind response Status.of_json with
+    match Result.bind response Msg.status_of_json with
     | Ok status -> status
-    | Error msg -> prerr_endline msg; Status.make ~ip:"error" ~port:0 false
+    | Error msg -> prerr_endline msg; `Error (`Unknown, msg)
   in
   let status, set_status = S.create status in
-  ignore_result (poll_status uri_stream set_status);
+  ignore_result (poll_status uri_stream status set_status);
   status
-
 
 (* query events *)
 
 let rec poll_events uri set_history history =
-  let* response = get_xml uri in
+  let id = Event.latest_id (S.value history) in
+  let uri' = Printf.sprintf "%s/%d" uri id in
+  let* response = get_xml uri' in
   match Result.bind response Event.parse_events with
-  | Ok events ->
-    List.iter (fun ev -> set_history (ev :: S.value history)) events;
-    poll_events uri set_history history
   | Error msg -> prerr_endline msg |> return
+  | Ok events ->
+    set_history (events @ S.value history);
+    poll_events uri set_history history
 
 let init_event_polling uri_static uri_stream =
   let+ prior_events =
@@ -65,7 +68,6 @@ let init_event_polling uri_static uri_stream =
 
 (* auxiliary function for displaying tables of events with
  * columns id | time | content *)
-
 
 let remove_children el =
   let children = el##.childNodes |> Dom.list_of_nodeList in
@@ -196,14 +198,14 @@ let show_details history active =
   let f = function
     | None -> ()
     | Some index ->
-      let hist = S.value history in
-      let n = List.length hist - index in
-      let ev = List.nth (S.value history) n in
-      let str = Event.to_yojson ev
-      |> replace_time ev
-      |> Yojson.Safe.pretty_to_string
-      |> fun x -> Regexp.global_replace (Regexp.regexp "\"") x "" in
-      pre##.innerHTML := Js.string str;
+      match List.find_opt (Event.has_id index) (S.value history) with
+      | None -> prerr_endline (Printf.sprintf "event %d not found" index)
+      | Some ev ->
+        let str = Event.to_yojson ev
+        |> replace_time ev
+        |> Yojson.Safe.pretty_to_string
+        |> fun x -> Regexp.global_replace (Regexp.regexp "\"") x "" in
+        pre##.innerHTML := Js.string str
   in
   f (S.value active);
   E.map f (S.changes active) |> E.keep
@@ -244,6 +246,46 @@ let render_quality_graph id history =
   |> Uplot.series ~label:"quality" ~data
   |> Uplot.render id
 
+let rec find_index x = function
+  | h :: t -> if h = x then 0 else 1 + find_index x t
+  | [] -> -1
+
+let render_elo_graph id history =
+  let open Event in
+  let open Contest in
+  let get_contest ev = match ev.body with Contest ct -> Some ct | _ -> None in
+  let contests = List.filter_map get_contest history in
+  let f names con = List.sort_uniq String.compare (names @ con.names) in
+  let players = List.fold_left f [] contests in
+  let color player =
+    let i = find_index player players in
+    let len = List.length players in
+    let s = 50 in
+    let l = 50 in
+    let h = (360. /. float_of_int len) *. (float_of_int i) in
+    Printf.sprintf "hsl(%.0f, %d%%, %d%%)" h s l
+  in
+  let width player = if String.contains player '*' then 2. else 1. in
+  let get_elo player contest =
+    let assoc = List.combine contest.names contest.elo in
+    List.assoc_opt player assoc
+    |> Option.map Float.round
+    |> Option.value ~default:Float.nan
+  in
+  let get_elo_data player = List.map (get_elo player) contests in
+  let series = List.map get_elo_data players in
+  let add_series graph =
+    let f gr (player, data) =
+      let stroke = color player in
+      let width = width player in
+      Uplot.series ~width ~stroke ~label:player ~data gr in
+    List.fold_left f graph (List.combine players series)
+  in
+  Uplot.empty ~width:550 ~height:400 ()
+  |> Uplot.time ~label:"contest"
+  |> add_series
+  |> Uplot.render id
+
 let show_progress_graph history =
   let id = "event-progress-graph" in
   let el = Dom_html.getElementById_exn "event-progress-select" in
@@ -258,6 +300,7 @@ let show_progress_graph history =
       match S.value selected with
       | "loss" -> render_loss_graph id (S.value history)
       | "quality" -> render_quality_graph id (S.value history)
+      | "elo" -> render_elo_graph id (S.value history)
       | _ -> prerr_endline "unsupported graph selected"
     in
     (* TODO: E.l2 does not seem to work here? Why? *)
@@ -283,7 +326,6 @@ let init_events_tab event history =
   connect_filter table history filter;
   show_details history active;
   show_progress_graph history
-
 
 (* script for the CONTESTS tab *)
 
@@ -404,7 +446,7 @@ let json_to_tyxml_entries ?(label_class=[]) ?(input_class=[])
     let lab = label ~a:[a_label_for k; a_class label_class] [txt key] in
     let inp =
       let typ = a_input_type `Text in
-      let default = a_value (Yojson.Safe.to_string value) in
+      let default = a_placeholder (Yojson.Safe.to_string value) in
       input ~a:[a_id k; a_name k; a_class input_class; typ; default] ()
     in
     div ~a:[a_class div_class] [lab; inp]
@@ -419,8 +461,58 @@ let pairs_to_yojson pairs =
   match List.map f pairs with
   | lst -> `Assoc lst |> Result.ok
   | exception _ -> Result.error "Invalid json"
+  
+let xml_http_request ?(meth="GET") ?(header=[]) ?cb body uri =
+  let req = XmlHttpRequest.create () in
+  req##_open (Js.string meth) (Js.string uri) Js._true;
+  List.iter
+    (fun (k, v) -> req##setRequestHeader (Js.string k) (Js.string v))
+    header;
+  req##send (Js.string body |> Js.Opt.return);
+  match cb with
+  | None -> ()
+  | Some cb ->
+    let handle _ =
+      let txt = Js.Opt.to_option req##.responseText in
+      cb req##.status (Option.map Js.to_string txt); Js._true in
+    req##.onload := Dom.handler handle
 
-
+let submit_context_callback el =
+  let btn =
+    el##querySelector (Js.string "#context-submit-button")
+    |> Js.Opt.to_option |> Option.get
+  in
+  let inputs = el##querySelectorAll (Js.string ".context-input") in
+  let handle _ =
+    let get_val x = match Js.to_string x##.value with
+    | "" -> x##getAttribute (Js.string "placeholder")
+      |> Js.Opt.to_option
+      |> Option.value ~default:(Js.string "undefined")
+      |> Js.to_string
+    | value -> value
+    in
+    let yojson = inputs
+    |> Dom.list_of_nodeList
+    |> List.map Dom_html.CoerceTo.input
+    |> List.filter_map Js.Opt.to_option
+    |> List.map (fun x -> (Js.to_string x##.name, get_val x))
+    |> List.cons ("id", "-1")
+    |> pairs_to_yojson
+    in
+    match Result.bind yojson Context.of_yojson with
+    | Error err -> prerr_endline err; Js._false
+    | Ok ctx ->
+      let json = Msg.context ctx |> Msg.to_json in
+      let header = ["content-type", "text/json"] in
+      let cb code txt = if code >= 400 then
+        let msg = Option.value ~default:"no message" txt in
+        Dom_html.window##alert (Js.string msg)
+      in
+      xml_http_request ~meth:"POST" ~header ~cb json "/api/msg";
+      Js._true
+  in
+  btn##.onclick := Dom.handler handle
+    
 let show_context_form history active =
   let rec partition_list n acc = function
     | [] -> List.rev acc, []
@@ -457,17 +549,17 @@ let show_context_form history active =
       let submit =
         let id = a_id "context-submit-button" in
         let cl = a_class ["button"] in
-        let value = a_value "submit" in
         div ~a:[a_class ["justify-right"]]
-          [input ~a:[id; cl; value; a_input_type `Submit] ()]
+          [button ~a:[id; cl] [txt "submit"]]
       in
       let form =
         let id = a_id "context-form" in
-        let action = a_action "/api/submit-context" in
-        let meth = a_method `Post in
-        form ~a:[id; action; meth] [inner; submit]
+       (* let action = a_action "/api/submit-context" in
+        let meth = a_method `Post in *)
+        div ~a:[id] [inner; submit]
       in
-      let el = Tyxml_js.To_dom.of_form form in
+      let el = Tyxml_js.To_dom.of_div form in
+      submit_context_callback el;
       match Dom.list_of_nodeList container##.childNodes with
       | [] -> Dom.appendChild container el
       | c :: _ -> Dom.replaceChild container el c
@@ -492,34 +584,58 @@ let init_context_tab event history =
 
 (* script for the menu bar *)
 
-let init_tabs () =
+let hide_element t = t##.classList##add (Js.string "hidden")
+let show_element t = t##.classList##remove (Js.string "hidden")
+let enact_element b = b##.classList##add (Js.string "active")
+let unact_element b = b##.classList##remove (Js.string "active")
+
+let init_tabs history =
   let keys = ["events"; "context"; "contests"; "model"; "clients"] in
   let tabs = List.map ((^) "tab-") keys |> List.map Dom_html.getElementById in
+  let noev = Dom_html.getElementById "tab-no-events" in
   let btts = List.map ((^) "menu-tab-") keys |> List.map Dom_html.getElementById in
-  let hide t = t##.classList##add (Js.string "hidden") in
-  let unact b = b##.classList##remove (Js.string "active") in
   let connect_button tab button =
     let handle () =
-      List.iter hide tabs;
-      List.iter unact btts;
-      tab##.classList##remove (Js.string "hidden");
-      button##.classList##add (Js.string "active")
+      List.iter hide_element tabs;
+      hide_element noev;
+      List.iter unact_element btts;
+      enact_element button;
+      match S.value history with
+      | [] -> show_element noev
+      | _ -> show_element tab
     in
     button##.onclick := Dom_html.handler (fun _ -> handle (); Js._true);
     if tab = List.hd tabs then handle ()
   in
-  List.iter2 connect_button tabs btts
+  List.iter2 connect_button tabs btts;
+  (* React on changes of the history. If it becomes empty, hide all tabs
+   * and show the no-event message *)
+  let no_events history =
+    match history with
+    | [] -> List.iter hide_element tabs; show_element noev
+    | _ -> hide_element noev
+  in
+  E.map no_events (S.changes history) |> E.keep
+
 
 let init_connection_status status =
+  let format src str = let open Printf in
+    let msg = match src with
+    | `TCP (ip, port) -> sprintf "tcp://%s:%d%s" ip port (fst str)
+    | `File fname -> sprintf "file://%s%s" fname (snd str)
+    | `Unknown -> "unknown status" in
+    Js.string msg |> Js.Opt.return
+  in
   let el = Dom_html.getElementById_exn "menu-connection-status" in
-  let set_status_msg s = match s.Status.connected with
-  | false ->
-    let msg = Printf.sprintf "not connected (%s:%d)" s.ip s.port in
-    el##.textContent := (Js.string msg |> Js.Opt.return);
+  let set_status_msg s = match s with
+  | `Connecting src ->
+    el##.textContent := format src (" (connecting...)", " (opening...)");
     el##.classList##remove (Js.string "connected")
-  | true ->
-    let msg = Printf.sprintf "connected (%s:%d)" s.ip s.port in
-    el##.textContent := (Js.string msg |> Js.Opt.return);
+  | `Error (src, _err) ->
+    el##.textContent := format src (" (not connected)", " (invalid)");
+    el##.classList##remove (Js.string "connected")
+  | `Ok src ->
+    el##.textContent := format src ("", ""); 
     el##.classList##add (Js.string "connected")
   in
   set_status_msg (S.value status);
@@ -535,7 +651,7 @@ let () =
     let* event, history = init_event_polling "/api/events" "/api/event-stream" in
     let* status = init_status_polling "/api/status" "/api/status-stream" in
     let () = init_connection_status status in
-    let () = init_tabs () in
+    let () = init_tabs history in
     let () = init_events_tab event history in
     let () = init_context_tab event history in
     let () = init_contests_tab event history in
