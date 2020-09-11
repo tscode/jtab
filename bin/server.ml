@@ -8,6 +8,7 @@ open Lwt_react
 
 let log msg = print_endline ("<jtab> " ^ msg)
 let log_err msg = prerr_endline ("<jtab> error: " ^ msg)
+let log_warn msg = prerr_endline ("<jtab> warning: " ^ msg)
 
 (* Communication with the train server / load event files *)
 
@@ -22,15 +23,17 @@ let read_history_file path =
   | _ -> Error ("cannot open file " ^ path)
 
 let open_connection ip port =
-  let ipaddr = Unix.inet_addr_of_string ip in 
-  let addr = Lwt_unix.ADDR_INET (ipaddr, port) in
-  let handle_exn _ =
-    let err =
-      Printf.sprintf "connecting to jtac instance %s:%d failed" ip port in
-    Error err |> Lwt.return
-  in
-  let connect () = Lwt.map Result.ok (Lwt_io.open_connection addr) in
-  Lwt.catch connect handle_exn 
+  match Unix.inet_addr_of_string ip with
+  | exception _ -> Error (ip ^ " is not a valid ip address") |> Lwt.return
+  | ipaddr ->
+    let addr = Lwt_unix.ADDR_INET (ipaddr, port) in
+    let handle_exn _ =
+      let err =
+        Printf.sprintf "connecting to jtac instance %s:%d failed" ip port in
+      Error err |> Lwt.return
+    in
+    let connect () = Lwt.map Result.ok (Lwt_io.open_connection addr) in
+    Lwt.catch connect handle_exn 
 
 let rec receive_events push ic =
   let* event = Lwt_io.read_line_opt ic in
@@ -93,13 +96,15 @@ let connect_source delay status set_status history set_history ctx =
     | `Ok _ | `Error _ -> Lwt.return ()
     | `Connecting source ->
     match source with
-    | `Unknown -> assert false
+    | `Unknown -> log "entering debug mode" |> Lwt.return
     | `TCP (ip, port) -> send_close (); connect_tcp source ip port 
     | `File path -> match read_history_file path with
       | Error msg ->
         log_err msg;
+        log_warn "no events will be exposed";
         set_status (`Error (source, msg)) |> Lwt.return
       | Ok events ->
+        log ("loaded history file " ^ path);
         set_history events;
         set_status (`Ok (source)) |> Lwt.return
   in
@@ -179,8 +184,9 @@ let handle_msg send_ctx status send_status = function
 
 (* Main program *)
 
-let main delay port source =
-  let status, send_status = S.create (`Connecting source) in
+let main delay debug port source =
+  let src = if debug then `Unknown else source in
+  let status, send_status = S.create (`Connecting src) in
   let history, send_history = S.create [] in
   let ctx, send_ctx = E.create () in
   let webserver =
@@ -190,7 +196,7 @@ let main delay port source =
   let events =
     connect_source delay status send_status history send_history ctx
   in
-  send_history (Debug.test_events 50); 
+  if debug then send_history (Debug.test_events 50); 
   Debug.log_status_events status history;
   Lwt_main.run @@ Lwt.pick [webserver; events]
 
@@ -201,8 +207,15 @@ let delay =
   server after an unsuccessful connection attempt." in
   Arg.(value & opt float 30. & info ["d"; "delay"] ~docv:"DELAY" ~doc)
 
+(*
+let host =
+  let doc = "Ip address on which the jtab website is served." in
+  let sym = ["h"; "host"; "ip"] in
+  Arg.(value & opt string "127.0.0.1" & info sym ~docv:"IP" ~doc)
+*)
+
 let port =
-  let doc = "Local port on which the jtab website is served." in
+  let doc = "Port on which the jtab website is served." in
   Arg.(value & opt int 7790 & info ["p"; "port"] ~docv:"PORT" ~doc)
 
 let source =
@@ -219,15 +232,18 @@ let source =
   let def = `TCP ("127.0.0.1", 7788) in
   Arg.(value & pos 0 src def & info [] ~docv:"SOURCE" ~doc)
 
+let debug =
+  let doc = "Start jtab in a debug mode with dummy events preloaded" in
+  Arg.(value & flag & info ["debug"] ~doc)
 
-
-let jtab_t = Term.(const main $ delay $ port $ source)
+let jtab_t = Term.(const main $ delay $ debug $ port $ source)
 
 let info =
   let doc = "monitor jtac training progress" in
   let man = [
     `S Manpage.s_bugs;
-    `P "Please report any issues you experience at https://github.com/tscode/jtab/issues." ]
+    `P "Please report any issues you experience at
+    https://github.com/tscode/jtab/issues." ]
   in
   Term.info "jtab" ~version ~doc ~exits:Term.default_exits ~man
 

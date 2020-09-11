@@ -29,7 +29,7 @@ type t =
 let source_to_string = function
   | `File path -> "file://" ^ path
   | `TCP (host, port) -> Printf.sprintf "tcp://%s:%d" host port
-  | `Unknown -> "<unknown source>"
+  | `Unknown -> "<debug mode>"
 
 let parse_source ?(host="127.0.0.1") ?(port=7789) src =
   let get_port str =
