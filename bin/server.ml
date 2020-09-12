@@ -166,7 +166,7 @@ let serve_webpage port handle_msg status history =
   |> List.fold_right (register_page) Web.pages
   |> register_msg handle_msg Web.api_msg
   |> App.start in
-  let msg = Printf.sprintf "webserver listens on 127.0.0.1:%d" port in
+  let msg = Printf.sprintf "webserver listens on 0.0.0.0:%d" port in
   log msg;
   Lwt.async server;
   fst (Lwt.wait ())
