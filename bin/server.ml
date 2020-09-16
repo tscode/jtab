@@ -196,7 +196,7 @@ let main delay debug port source =
   let events =
     connect_source delay status send_status history send_history ctx
   in
-  if debug then send_history (Debug.test_events 50); 
+  if debug then send_history (Debug.test_events 100); 
   Debug.log_status_events status history;
   Lwt_main.run @@ Lwt.pick [webserver; events]
 

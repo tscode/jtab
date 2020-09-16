@@ -1,10 +1,6 @@
 
-type loss = {
-    value : float
-  ; policy : float
-  ; feature : float
-  ; total : float
-} [@@deriving yojson]
+type loss = (string * float) list
+  [@@deriving yojson]
 
 type epoch = {
     number : int

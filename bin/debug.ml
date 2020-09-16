@@ -15,10 +15,10 @@ let log_status_events _status history =
 let test_events n = let open Event in
   let rand () = Random.float 1. in
   let loss () =
-    { policy = rand ()
-    ; value = rand ()
-    ; feature = rand ()
-    ; total = rand () }
+    [ "policy", rand ()
+    ; "value", rand ()
+    ; "reg", rand ()
+    ; "total", rand () ]
   in
   let epoch number = Epoch
     { number

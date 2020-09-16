@@ -210,30 +210,6 @@ let show_details history active =
   f (S.value active);
   E.map f (S.changes active) |> E.keep
   
-
-let render_loss_graph id history =
-  let open Event in
-  let epoch_loss ev = match ev.body with
-  | Epoch ep -> Some (ep.trainloss, ep.testloss)
-  | _ -> None
-  in
-  let train, test = List.filter_map epoch_loss history |> List.split in
-  let render title ls =
-    Uplot.empty ~width:550 ~height:250 ~title ()
-    |> Uplot.time ~label:"epoch"
-    |> Uplot.series
-       ~stroke:"#888888" ~label:"f" ~data:(List.map (fun x -> x.feature) ls)
-    |> Uplot.series
-       ~stroke:"#224488" ~label:"p" ~data:(List.map (fun x -> x.policy) ls)
-    |> Uplot.series
-       ~stroke:"#228844" ~label:"v" ~data:(List.map (fun x -> x.value) ls)
-    |> Uplot.series ~width:2.
-       ~stroke:"#cc8844" ~label:"t" ~data:(List.map (fun x -> x.total) ls)
-    |> Uplot.render id
-  in
-  render "train" train;
-  render "test" test
-
 let render_quality_graph id history =
   let open Event in
   let epoch_quality ev = match ev.body with
@@ -250,21 +226,54 @@ let rec find_index x = function
   | h :: t -> if h = x then 0 else 1 + find_index x t
   | [] -> -1
 
+let palette n i =
+  let s, l = 50, 50 in
+  let h = (360. /. float_of_int n) *. (float_of_int i) in
+  Printf.sprintf "hsl(%.0f, %d%%, %d%%)" h s l
+
+let collect_names get_names collection =
+  let f names x = List.sort_uniq String.compare (names @ get_names x) in
+  List.fold_left f [] collection
+
+let add_series color width data names graph =
+  let f gr name =
+    let stroke, width, data = color name, width name, data name in
+    Uplot.series ~width ~stroke ~data ~label:name gr
+  in
+  List.fold_left f graph names
+
+let render_loss_graph id history =
+  let open Event in
+  let epoch_loss ev = match ev.body with
+  | Epoch ep -> Some (ep.trainloss, ep.testloss)
+  | _ -> None in
+  let train, test = List.filter_map epoch_loss history |> List.split in
+  let render title ls =
+    let names = collect_names (List.map fst) ls in
+    let pal = palette (List.length names) in
+    let color name = pal (find_index name names) in
+    let width name = if name = "total" then 2. else 1. in
+    let get_value name l =
+      List.assoc_opt name l
+      |> Option.value ~default:Float.nan
+    in
+    let data name = List.map (get_value name) ls in
+    Uplot.empty ~width:550 ~height:250 ~title ()
+    |> Uplot.time ~label:"epoch"
+    |> add_series color width data names
+    |> Uplot.render id
+  in
+  render "train" train;
+  render "test" test
+
 let render_elo_graph id history =
   let open Event in
   let open Contest in
   let get_contest ev = match ev.body with Contest ct -> Some ct | _ -> None in
   let contests = List.filter_map get_contest history in
-  let f names con = List.sort_uniq String.compare (names @ con.names) in
-  let players = List.fold_left f [] contests in
-  let color player =
-    let i = find_index player players in
-    let len = List.length players in
-    let s = 50 in
-    let l = 50 in
-    let h = (360. /. float_of_int len) *. (float_of_int i) in
-    Printf.sprintf "hsl(%.0f, %d%%, %d%%)" h s l
-  in
+  let players = collect_names (fun c -> c.names) contests in
+  let pal = palette (List.length players) in
+  let color player = pal (find_index player players) in
   let width player = if String.contains player '*' then 2. else 1. in
   let get_elo player contest =
     let assoc = List.combine contest.names contest.elo in
@@ -272,18 +281,10 @@ let render_elo_graph id history =
     |> Option.map Float.round
     |> Option.value ~default:Float.nan
   in
-  let get_elo_data player = List.map (get_elo player) contests in
-  let series = List.map get_elo_data players in
-  let add_series graph =
-    let f gr (player, data) =
-      let stroke = color player in
-      let width = width player in
-      Uplot.series ~width ~stroke ~label:player ~data gr in
-    List.fold_left f graph (List.combine players series)
-  in
+  let data player = List.map (get_elo player) contests in
   Uplot.empty ~width:550 ~height:400 ()
   |> Uplot.time ~label:"contest"
-  |> add_series
+  |> add_series color width data players
   |> Uplot.render id
 
 let show_progress_graph history =
