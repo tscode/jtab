@@ -22,7 +22,7 @@ type t = {
   ; era_size : int
   ; batch_size : int
   ; learning_rate : float
-  ; loss_weights : float * float * float
+  ; loss_weights : float list
   ; momentum : float
   ; backup_folder : string
   ; backup_number : int
@@ -52,7 +52,7 @@ let dummy id = {
   ; era_size = 100000
   ; batch_size = 1024
   ; learning_rate = 1e-3
-  ; loss_weights = (1., 1., 1.)
+  ; loss_weights = [1.; 1.; 1.]
   ; momentum = 0.9
   ; backup_folder = "./"
   ; backup_number =  3
