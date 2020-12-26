@@ -22,8 +22,8 @@ type t = {
   ; era_size : int
   ; batch_size : int
   ; learning_rate : float
-  ; loss_weights : float list
   ; momentum : float
+  ; loss_weights : float list
   ; backup_folder : string
   ; backup_number : int
   ; msg : string (* additional message, like source of context change *)

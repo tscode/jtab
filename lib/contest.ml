@@ -10,7 +10,6 @@ type t = {
   ; sadv : float
 } [@@deriving yojson]
 
-
 let dummy () =
   let sum l = List.fold_left (+) 0 l in
   let balance =

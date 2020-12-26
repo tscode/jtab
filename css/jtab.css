@@ -94,6 +94,14 @@ ul.no-bullets {
   background-color: #ddecf9;
 }
 
+.menu-tab:hover {
+  background-color: #eef7ff;
+}
+
+.menu-tab.active:hover {
+  background-color: #ddecf9;
+}
+
 div#menu-bar {
   padding: 0px 3%;
   box-shadow: 0px 0.5px 5px #333;
@@ -200,14 +208,41 @@ button.menu-tab {
   height: 100%;
 }
 
+#menu-connection {
+/*  position: relative; */
+/*  display: inline-block; */
+  justify-content: end;
+  min-width: 250px;
+}
+
+#menu-connection-change {
+  position: absolute;
+  background-color: #fff;
+  box-shadow: 0.0px 0.0px 4px #666;
+  z-index: 1;
+  top: 50px;
+  padding: 0ex 1em;
+  padding-bottom: 1ex;
+}
+
+#menu-connection-direct {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 #menu-connection-status {
-  justify-content: flex-end;
   font-family: sans-serif;
   color: #b34e4e;
   font-weight: bold;
   font-size: small;
   text-align: right;
-  width: 20em;
+  max-width: 250px;
+  overflow-x: hidden;
+  text-overflow: ellipsis;
+}
+
+#menu-connection-status:hover {
+  cursor: pointer;
 }
 
 #menu-connection-status.connected {

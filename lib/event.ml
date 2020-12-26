@@ -43,25 +43,24 @@ type client = {
 } [@@deriving yojson]
 
 type body =
-    Era of era
-  | Epoch of epoch
-  | Data of data
-  | Datareq of datareq
-  | Contest of Contest.t
+  | Era        of era
+  | Epoch      of epoch
+  | Data       of data
+  | Datareq    of datareq
+  | Contest    of Contest.t
   | Contestreq of contestreq
-  | Client of client
-  | Context of Context.t (* source of the context change *)
+  | Client     of client
+  | Context    of Context.t (* source of the context change *)
   [@@deriving yojson]
 
 type time =
-  { year : int
-  ; month : int
-  ; day : int
-  ; hour : int
-  ; second : int } [@@deriving yojson]
-
-let time ?(year=2019) ?(month=12) ?(day=7) ?(hour=13) ?(second=55) () =
-  {year; month; day; hour; second}
+  { year   : int
+  ; month  : int
+  ; day    : int
+  ; hour   : int
+  ; minute : int
+  ; second : int }
+  [@@deriving yojson]
 
 let time_to_string time =
   Printf.sprintf "%02d:%02d" time.hour time.second
@@ -76,7 +75,7 @@ type t =
   ; body : body }
   [@@deriving yojson]
 
-let event ?(time=time ()) ?(id=(-1)) body = {time; id; body}
+let event ~time ~id body = {time; id; body}
 
 let parse str =
   try Yojson.Safe.from_string str |> of_yojson with
@@ -88,7 +87,8 @@ let parse_events str =
     |> of_yojson
     |> Result.get_ok
   in
-  try Ok (List.map f (String.split_on_char '\n' str))
+  let lines = String.split_on_char '\n' str in
+  try Ok (List.filter (fun l -> String.trim l <> "") lines |> List.map f)
   with exn ->
     let exs = Printexc.to_string exn in
     Error (Printf.sprintf "could not parse event list: %s" exs) 
@@ -108,13 +108,13 @@ let events_to_string events =
     List.iter (fun ev -> add_sep (); add_event ev) tl;
     Buffer.contents buf
   
-
 let to_json ev =
   to_yojson ev |> Yojson.Safe.to_string
 
 let time ev = ev.time
 
-let info ev = ev.body |> body_to_yojson |> Yojson.Safe.pretty_to_string
+let info ev =
+  ev.body |> body_to_yojson |> Yojson.Safe.pretty_to_string
 
 let summary ev = let open Printf in match ev.body with
   | Era era       -> sprintf "Era %d ended" era.number
@@ -140,3 +140,4 @@ let take_later_than id history =
 let latest = function
   | [] -> None
   | h :: _ -> Some h
+
