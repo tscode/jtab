@@ -45,15 +45,24 @@ let rec init_status_polling uri_static uri_stream =
 
 (* query events *)
 
-let rec poll_events uri set_history history =
+let extract_model events = let open Event in
+  let f x = match x.body with Model m -> Some m  | _ -> None in
+  match List.filter_map f events with
+  | m :: _ -> Some m
+  | [] -> None
+
+let rec poll_events uri set_history history set_model model =
   let id = Event.latest_id (S.value history) in
   let uri' = Printf.sprintf "%s/%d" uri id in
+  Printf.printf "DEBUG: polling %s for events\n" uri';
   let* response = get_xml uri' in
   match Result.bind response Event.parse_events with
   | Error msg -> prerr_endline msg |> return
   | Ok events ->
+    Printf.printf "DEBUG: got events back\n";
+    if S.value model = None then set_model (extract_model events);
     set_history (events @ S.value history);
-    poll_events uri set_history history
+    poll_events uri set_history history set_model model
 
 let init_event_polling uri_static uri_stream =
   let+ prior_events =
@@ -63,9 +72,10 @@ let init_event_polling uri_static uri_stream =
     | Error msg -> prerr_endline msg; []
   in
   let history, set = S.create prior_events in
-  let event = E.map List.hd (S.changes history) in
-  ignore_result (poll_events uri_stream set history);
-  event, history
+  let events = S.diff Event.rev_history_diff history in
+  let model, set_model = S.create (extract_model prior_events) in
+  ignore_result (poll_events uri_stream set history set_model model);
+  events, history, model
 
 
 (* auxiliary function for displaying tables of events with
@@ -154,10 +164,10 @@ let event_selector () =
 
 let match_selector ev selector =
   match (selector, ev.Event.body) with
-  | `Epochs, Epoch _ | `Eras, Era _ | `Data, Data _
-  | `Data, Datareq _ | `Context, Context _
+  | `Epochs, Epoch _     | `Eras, Era _ | `Data, Data _
+  | `Data, Datareq _     | `Context, Context _
   | `Contests, Contest _ | `Contests, Contestreq _
-  | `Clients, Client _ -> true
+  | `Clients, Client _   | _, Model _ -> true
   | _ -> false
 
 (* TODO: improve this matching function *)
@@ -211,6 +221,13 @@ let show_details history active =
   in
   f (S.value active);
   E.map f (S.changes active) |> E.keep
+
+let insufficient_graph_data kind id =
+ let open Tyxml_js.Html in
+ let el = Dom_html.getElementById_exn id in
+ let text = Printf.sprintf "not enough %s events recorded for progress graph" kind in
+ let child = div ~a:[a_class ["insufficient-data"]] [txt text] in
+ Dom.appendChild el (Tyxml_js.To_dom.of_div child)
   
 let render_quality_graph id history =
   let open Event in
@@ -218,7 +235,10 @@ let render_quality_graph id history =
   | Epoch ep -> Some ep.quality
   | _ -> None
   in
-  let data = List.filter_map epoch_quality history in
+  let data = List.filter_map epoch_quality history |> List.rev in
+  match List.length data <= 1 with
+  | true -> insufficient_graph_data "epoch" id
+  | false ->
   Uplot.empty ~width:550 ~height:250 ()
   |> Uplot.time ~label:"epoch"
   |> Uplot.series ~label:"quality" ~data
@@ -250,6 +270,9 @@ let render_loss_graph id history =
   | Epoch ep -> Some (ep.trainloss, ep.testloss)
   | _ -> None in
   let train, test = List.filter_map epoch_loss history |> List.split in
+  match List.length train <= 1 with
+  | true -> insufficient_graph_data "epoch" id
+  | false ->
   let render title ls =
     let names = collect_names (List.map fst) ls in
     let pal = palette (List.length names) in
@@ -257,9 +280,10 @@ let render_loss_graph id history =
     let width name = if name = "total" then 2. else 1. in
     let get_value name l =
       List.assoc_opt name l
+      |> Option.map (function 0. -> Float.nan | x -> x)
       |> Option.value ~default:Float.nan
     in
-    let data name = List.map (get_value name) ls in
+    let data name = List.map (get_value name) ls |> List.rev in
     Uplot.empty ~width:550 ~height:250 ~title ()
     |> Uplot.time ~label:"epoch"
     |> add_series color width data names
@@ -273,6 +297,9 @@ let render_elo_graph id history =
   let open Contest in
   let get_contest ev = match ev.body with Contest ct -> Some ct | _ -> None in
   let contests = List.filter_map get_contest history in
+  match List.length contests <= 1 with
+  | true -> insufficient_graph_data "contest" id
+  | false ->
   let players = collect_names (fun c -> c.names) contests in
   let pal = palette (List.length players) in
   let color player = pal (find_index player players) in
@@ -283,7 +310,7 @@ let render_elo_graph id history =
     |> Option.map Float.round
     |> Option.value ~default:Float.nan
   in
-  let data player = List.map (get_elo player) contests in
+  let data player = List.map (get_elo player) contests |> List.rev in
   Uplot.empty ~width:550 ~height:400 ()
   |> Uplot.time ~label:"contest"
   |> add_series color width data players
@@ -311,7 +338,7 @@ let show_progress_graph history =
     E.map f (S.changes selected) |> E.keep;
     E.map f (S.changes history) |> E.keep
 
-let init_events_tab event history =
+let init_events_tab events history =
   let search = event_searchstring () in
   let selector = event_selector () in
   let filter = S.Pair.pair search selector in
@@ -325,7 +352,7 @@ let init_events_tab event history =
     then row##.classList##add (Js.string "hidden")
   in
   List.iter insert (S.value history |> List.rev);
-  E.keep (E.map insert event);
+  E.map (List.iter insert) events |> E.keep;
   connect_filter table history filter;
   show_details history active;
   show_progress_graph history
@@ -407,7 +434,6 @@ let matches_table (c : Contest.t) = let open Tyxml_js.Html in
   let rows = index_row :: List.mapi create_row c.balance in
   table ~a:[a_id "contests-matches-table"] rows
 
-
 let show_matches active history =
   let div = Dom_html.getElementById_exn "contests-matches-container" in
   let update = function
@@ -423,7 +449,7 @@ let show_matches active history =
   E.map update (S.changes active) |> E.keep
 
 
-let init_contests_tab event history =
+let init_contests_tab events history =
   let id_str n = "contest:" ^ Int.to_string n in
   let active, set = S.create None in
   let table = Dom_html.getElementById_exn "contests-event-table" in
@@ -434,7 +460,7 @@ let init_contests_tab event history =
   | _ -> ()
   in
   List.iter insert (S.value history |> List.rev);
-  E.map insert event |> E.keep;
+  E.map (List.iter insert) events |> E.keep;
   show_results active history;
   show_matches active history
 
@@ -570,7 +596,7 @@ let show_context_form history active =
   f (S.value active);
   E.map f (S.changes active) |> E.keep
 
-let init_context_tab event history =
+let init_context_tab events history =
   let active, set = S.create None in
   let table = Dom_html.getElementById_exn "context-event-table" in
   let insert ev = let open Event in match ev.body with
@@ -581,7 +607,7 @@ let init_context_tab event history =
   | _ -> ()
   in
   List.iter insert (S.value history |> List.rev);
-  E.map insert event |> E.keep;
+  E.map (List.iter insert) events |> E.keep;
   show_context_form history active
 
 
@@ -620,96 +646,80 @@ let init_tabs history =
   in
   E.map no_events (S.changes history) |> E.keep
 
-let init_connection_change () =
-  let status = Dom_html.getElementById_exn "menu-connection-status" in
-  let el = Dom_html.getElementById_exn "menu-connection-change" in
-  let menu = let open Tyxml_js.Html in
-    let direct =
-      let title = div ~a:[a_class ["title"]] [txt "change source"] in
-      let i = input ~a:[a_id "menu-connection-direct"; a_input_type `Text] () in
-      div [title; i]
-    in
-    let upload =
-      let title = div ~a:[a_class ["title"]] [txt "upload history"] in
-      let i = input ~a:[a_id "menu-connection-upload"; a_input_type `File] () in
-      div [title; i]
-    in
-    div [direct; upload]
-    |> Tyxml_js.To_dom.of_div
-  in
-  Dom.appendChild el menu;
-  let direct =
-    Dom_html.getElementById_exn "menu-connection-direct"
-    |> Dom_html.CoerceTo.input
-    |> Js.Opt.to_option
-    |> Option.get
+let get_input_by_id id =
+  Dom_html.getElementById_exn id
+  |> Dom_html.CoerceTo.input
+  |> Js.Opt.to_option |> Option.get
+
+let change_source_dialog () =
+  let open Tyxml_js.Html in
+  let switch =
+    let title = div ~a:[a_class ["title"]] [txt "change source"] in
+    let i = input ~a:[a_id "menu-status-source-switch"; a_input_type `Text] () in
+    div [title; i]
   in
   let upload =
-    Dom_html.getElementById_exn "menu-connection-upload"
-    |> Dom_html.CoerceTo.input
-    |> Js.Opt.to_option
-    |> Option.get
+    let title = div ~a:[a_class ["title"]] [txt "upload history"] in
+    let i = input ~a:[a_id "menu-status-source-upload"; a_input_type `File] () in
+    div [title; i]
   in
-  (* toggle dialog to change source *)
-  begin
-    let handle _ =
-      let ph = status##.textContent |> Js.Opt.to_option |> Option.get in
-      direct##.placeholder := ph;
-      el##.classList##toggle (Js.string "hidden")
-    in
-    status##.onclick := Dom_html.handler handle
-  end;
-  let cb code txt =
+  div [switch; upload] |> Tyxml_js.To_dom.of_div
+
+(* script for the status information in the menu bar (source and model) *)
+
+let init_source_change () =
+  let status = Dom_html.getElementById_exn "menu-status-source" in
+  let el = Dom_html.getElementById_exn "menu-status-source-change" in
+  Dom.appendChild el (change_source_dialog ());
+  let switch = get_input_by_id "menu-status-source-switch" in
+  let upload = get_input_by_id "menu-status-source-upload" in
+  let cb code text =
     match code < 400 with
     | true  -> Dom_html.window##.location##reload
     | false -> 
-    let msg = Option.value ~default:"no message" txt in
+    let msg = Option.value ~default:"no message" text in
     Dom_html.window##alert (Js.string msg)
   in
-  (* act on changed source *)
-  begin
-    let handle _ =
-      match direct##.value |> Js.to_string with
-      | "" -> Js._true
-      | str ->
-      match Status.parse_source str with
-      | None ->
-        let msg = Printf.sprintf "cannot parse source '%s'" str in
-        Dom_html.window##alert (Js.string msg); Js._true
-      | Some src -> 
-        let json = Status.source_to_json src in
-        let header = ["content-type", "text/json"] in
-        xml_http_request ~meth:"POST" ~header ~cb json "/api/post/source";
-        Js._true
+  (* make dialog become visible on click *)
+  status##.onclick := Dom_html.handler (fun _ ->
+    let ph = status##.textContent |> Js.Opt.to_option in
+    switch##.placeholder := Option.get ph;
+    status##.classList##toggle (Js.string "active") |> ignore;
+    el##.classList##toggle (Js.string "hidden"));
+  (* act upon source switch *)
+  switch##.onchange := Dom_html.handler (fun _ ->
+    match switch##.value |> Js.to_string with
+    | "" -> Js._true
+    | str ->
+    match Status.parse_source str with
+    | None ->
+      let msg = Printf.sprintf "cannot parse source '%s'" str in
+      Dom_html.window##alert (Js.string msg); Js._true
+    | Some src -> 
+      let json = Status.source_to_json src in
+      let header = ["content-type", "text/json"] in
+      xml_http_request ~meth:"POST" ~header ~cb json "/api/post/source";
+      Js._true);
+  (* act upon file upload *)
+  upload##.onchange := Dom_html.handler (fun _ ->
+    match upload##.files |> Js.Optdef.to_option with
+    | None -> Js._true
+    | Some files ->
+    match files##item 0 |> Js.Opt.to_option with
+    | None -> log_console "No files selected"; Js._true
+    | Some file ->
+    let name = file##.name |> Js.to_string in
+    log_console ("Selected file:" ^ name);
+    let request () =
+      let+ str = File.readAsText file in
+      let content = Js.to_string str in
+      let json = `History (name, content) |> Status.source_to_json in
+      let header = ["content-type", "text/json"] in
+      xml_http_request ~meth:"POST" ~header ~cb json "/api/post/source"
     in
-    direct##.onchange := Dom_html.handler handle
-  end;
-  (* history file upload *)
-  begin
-    let handle _ =
-      match upload##.files |> Js.Optdef.to_option with
-      | None -> Js._true
-      | Some files ->
-      match files##item 0 |> Js.Opt.to_option with
-      | None -> log_console "No files selected"; Js._true
-      | Some file ->
-      let name = file##.name |> Js.to_string in
-      log_console ("Selected file:" ^ name);
-      let request () =
-        let+ str = File.readAsText file in
-        let content = Js.to_string str in
-        let json = `History (name, content) |> Status.source_to_json in
-        let header = ["content-type", "text/json"] in
-        xml_http_request ~meth:"POST" ~header ~cb json "/api/post/source"
-      in
-      Lwt.async request; Js._true
-    in
-    upload##.onchange := Dom_html.handler handle
-  end
-  
+    Lwt.async request; Js._true)
 
-
-let init_connection_status status =
+let init_source_msg status = 
   let format src str = let open Printf in
     let msg = match src with
     | `TCP (ip, port) -> sprintf "tcp://%s:%d%s" ip port (fst str)
@@ -719,7 +729,7 @@ let init_connection_status status =
     in
     Js.string msg |> Js.Opt.return
   in
-  let el = Dom_html.getElementById_exn "menu-connection-status" in
+  let el = Dom_html.getElementById_exn "menu-status-source" in
   let set_status_msg s = match s with
   | `Connecting src ->
     el##.textContent := format src (" (connecting...)", " (opening...)");
@@ -732,23 +742,74 @@ let init_connection_status status =
     el##.classList##add (Js.string "connected")
   in
   set_status_msg (S.value status);
-  E.map set_status_msg (S.changes status) |> E.keep;
-  init_connection_change ()
+  E.map set_status_msg (S.changes status) |> E.keep
+
+let init_model_name model =
+  let el = Dom_html.getElementById_exn "menu-status-model" in
+  let set_name m =
+    let name = match m with
+    | None -> "<no model found>"
+    | Some m -> Model.get_name m
+    in
+    el##.textContent := Js.string name |> Js.Opt.return
+  in
+  set_name (S.value model);
+  E.map set_name (S.changes model) |> E.keep
+
+let model_info_window model =
+  let open Tyxml_js.Html in
+  let title = div ~a:[a_class ["title"]] [txt "model info"] in
+  let row (key, value) =
+    tr [ td ~a:[a_class ["model-info-key"]] [txt key]
+       ; td ~a:[a_class ["model-info-value"]] [txt value]]
+  in
+  let rows = List.map row
+    [ "name", Model.get_name model
+    ; "base", Model.get_base model |> Option.value ~default:"<none>"
+    ; "params", Model.get_params model |> string_of_int ]
+  in
+  div [title; table rows]  |> Tyxml_js.To_dom.of_div
+
+let init_model_info model =
+  let el = Dom_html.getElementById_exn "menu-status-model" in
+  let info = Dom_html.getElementById_exn "menu-status-model-info" in
+  el##.onmouseover := Dom_html.handler (fun _ ->
+    match S.value model with
+    | None -> Js._true
+    | Some m ->
+    Dom.appendChild info (model_info_window m);
+    info##.classList##remove (Js.string "hidden");
+    Js._true
+  );
+  el##.onmouseout := Dom_html.handler (fun _ ->
+    match info##.firstChild |> Js.Opt.to_option with
+    | None -> Js._true
+    | Some c ->
+    info##.classList##add (Js.string "hidden");
+    Dom.removeChild info c; Js._true
+  )
+  
+let init_status_overview status model =
+  init_model_name model;
+  init_model_info model;
+  init_source_msg status;
+  init_source_change ()
 
 
 (* run javascript for the menu and all tabs *)
 
 let () =
-  let promise =
+  let promise () =
     let* () = Lwt_js_events.domContentLoaded () in
-    let* event, history = init_event_polling "/api/events" "/api/event-stream" in
-    let* status = init_status_polling "/api/status" "/api/status-stream" in
-    let () = init_connection_status status in
-    let () = init_tabs history in
-    let () = init_events_tab event history in
-    let () = init_context_tab event history in
-    let () = init_contests_tab event history in
-    fst (Lwt.wait ())
+    let* events, history, model = init_event_polling "/api/events" "/api/stream/events" in
+    let* status = init_status_polling "/api/status" "/api/stream/status" in
+    init_status_overview status model;
+    init_tabs history;
+    init_events_tab events history;
+    init_context_tab events history;
+    init_contests_tab events history;
+    fst (Lwt.wait ()) (* I am not sure if this is needed, or what is the best
+    way to execute Lwt threads in Js_of_ocaml... *)
   in
-  ignore_result promise
+  Lwt.async promise
 

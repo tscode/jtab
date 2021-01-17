@@ -79,7 +79,8 @@ let series_options s =
 
 let render target p =
   let time = match p.time.data with
-  | [] -> derive_time_data p.time (List.hd p.series |> series_length)
+  | [] ->
+    derive_time_data p.time (List.hd p.series |> series_length)
   | _ -> p.time
   in
   let container =

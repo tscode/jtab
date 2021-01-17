@@ -12,17 +12,24 @@ let data =
   ; "/api/history", history
   ; "/api/status" , status ]
 
-let event_stream params _status event history =
-  let hist = S.value history in
+let event_stream params _status history =
+  let update = E.stamp (S.changes history) () |> E.to_stream in
   let id = match params with
-  | [] -> Event.latest_id hist
+  | [] -> Event.latest_id (S.value history)
   | [id] -> int_of_string id
   | _ -> assert false in
-  match Event.take_later_than id hist with
-  | [] -> let+ ev = E.next event in Event.events_to_string [ev]
-  | events -> Lwt.return (Event.events_to_string events)
+  let rec return_events () =
+    match Event.take_later_than id (S.value history) with
+    | [] ->
+      (* TODO: should understand why the sleep is necessary here;
+         otherwise E.next / Lwt_stream.next refuse to return sometimes *)
+      let* () = Lwt.pick [Lwt_stream.next update; Lwt_unix.sleep 60.] in
+      return_events () 
+    | events -> Lwt.return (Event.events_to_string events)
+  in
+  return_events ()
 
-let status_stream params status _event _history =
+let status_stream params status _history =
   let s = S.value status in
   let h = Status.hash s in
   let hash = match params with
@@ -34,10 +41,10 @@ let status_stream params status _event _history =
   | false -> Lwt.return (Status.to_json s)
 
 let streams =
-  [ "/api/event-stream"       , event_stream , []
-  ; "/api/event-stream/:id"   , event_stream , ["id"]
-  ; "/api/status-stream"      , status_stream, []
-  ; "/api/status-stream/:hash", status_stream, ["hash"]]
+  [ "/api/stream/events"       , event_stream , []
+  ; "/api/stream/events/:id"   , event_stream , ["id"]
+  ; "/api/stream/status"       , status_stream, []
+  ; "/api/stream/status/:hash" , status_stream, ["hash"]]
 
 
 let post =

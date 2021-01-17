@@ -90,7 +90,7 @@ ul.no-bullets {
   padding-bottom: 1.25ex;
 }
 
-.menu-tab.active {
+.active {
   background-color: #ddecf9;
 }
 
@@ -98,7 +98,7 @@ ul.no-bullets {
   background-color: #eef7ff;
 }
 
-.menu-tab.active:hover {
+.active:hover {
   background-color: #ddecf9;
 }
 
@@ -136,6 +136,7 @@ button {
 
   border: 0px solid black;
   background-color: white;
+  color: #444;
 
   font-size: 16px;
   cursor: pointer;
@@ -208,14 +209,37 @@ button.menu-tab {
   height: 100%;
 }
 
-#menu-connection {
+/* Status information (model, source) */
+
+#menu-status {
 /*  position: relative; */
 /*  display: inline-block; */
   justify-content: end;
-  min-width: 250px;
+  min-width: 400px;
 }
 
-#menu-connection-change {
+span.status {
+  font-family: sans-serif;
+  font-weight: bold;
+  font-size: small;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 1ex 1em;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+span.status:hover {
+  background-color: #eef7ff;
+}
+
+#menu-status-model {
+  color: #777;
+  max-width: 150px;
+  cursor: default;
+}
+
+#menu-status-model-info {
   position: absolute;
   background-color: #fff;
   box-shadow: 0.0px 0.0px 4px #666;
@@ -225,27 +249,34 @@ button.menu-tab {
   padding-bottom: 1ex;
 }
 
-#menu-connection-direct {
+#menu-status-source {
+  max-width: 250px;
+}
+
+#menu-status-source.active:hover {
+  background-color: #ddecf9;
+}
+
+#menu-status-source-change {
+  position: absolute;
+  background-color: #fff;
+  box-shadow: 0.0px 0.0px 4px #666;
+  z-index: 1;
+  top: 50px;
+  padding: 0ex 1em;
+  padding-bottom: 1ex;
+}
+
+#menu-status-source-switch {
   width: 100%;
   box-sizing: border-box;
 }
 
-#menu-connection-status {
-  font-family: sans-serif;
+#menu-status-source {
   color: #b34e4e;
-  font-weight: bold;
-  font-size: small;
-  text-align: right;
-  max-width: 250px;
-  overflow-x: hidden;
-  text-overflow: ellipsis;
 }
 
-#menu-connection-status:hover {
-  cursor: pointer;
-}
-
-#menu-connection-status.connected {
+#menu-status-source.connected {
   color: green;
 }
 
@@ -322,6 +353,20 @@ table#contests-event-table {
   max-height: 600px;
 }
 
+/* Model info table */
+
+td.model-info-key {
+  font-family: sans-serif;
+/*  font-weight: bold; */
+  color: #333;
+  padding-right: 1.5em;
+}
+
+td.model-info-value {
+  font-family: sans-serif;
+  color: green;
+}
+
 
 /* Contests ranking table */
 
@@ -380,6 +425,14 @@ pre#event-details {
   overflow-x: auto;
   min-height: 10ex;
   font-size: 8pt;
+}
+
+.insufficient-data {
+ font-family: sans-serif;
+ color: #666;
+ width: 550px;
+ text-align: center;
+ padding-bottom: 2ex;
 }
 
 

@@ -1,6 +1,7 @@
 
 type t = {
-    client : string
+    reqid : int
+  ; client : string
   ; era : int
   ; names : string list
   ; matches : int
@@ -15,7 +16,8 @@ let dummy () =
   let balance =
     let f _ = List.init 5 (fun _ -> Random.int 20 - 10) in List.init 5 f
   in
-  { client = "best-contest-client"
+  { reqid = Random.int 50
+  ; client = "best-contest-client"
   ; era = Random.int 20
   ; names = ["mcts-1500"; "mcts-750"; "mcts-250"; "mcts-10"; "model*"]
   ; matches = (List.map sum balance |> sum) + Random.int 100

@@ -250,9 +250,13 @@ let init version = let open Html in
   in
   let status =
     let hidden = a_class ["hidden"] in
-    let show = span ~a:[a_id "menu-connection-status"] [] in
-    let change = div ~a:[a_id "menu-connection-change"; hidden] [] in
-    div ~a:[a_id "menu-connection"; spanclass] [show; change]
+    let model =
+      [ span ~a:[a_id "menu-status-model"; a_class ["status"]] []
+      ; div ~a:[a_id "menu-status-model-info"; hidden] [] ] in
+    let source =
+      [ span ~a:[a_id "menu-status-source"; a_class ["status"]] []
+      ; div ~a:[a_id "menu-status-source-change"; hidden] [] ] in
+    div ~a:[a_id "menu-status"; spanclass] (model @ source)
   in
   let menu = div ~a:[a_id "menu-bar"] (logo :: tabs :: [status]) in
   let body = body

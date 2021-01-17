@@ -13,9 +13,9 @@ type epoch = {
 } [@@deriving yojson] 
 
 type era = {
-    name : string
-  ; number : int
+    number : int
   ; epoch : int
+  ; metrics : (string * float) list 
 } [@@deriving yojson]
 
 type contestreq = {
@@ -25,7 +25,6 @@ type contestreq = {
 type datareq = {
     reqid : int
   ; ctxid : int
-  ; era : string
 } [@@deriving yojson]
 
 type data = {
@@ -39,6 +38,8 @@ type data = {
 
 type client = {
     name : string
+  ; ip : string
+  ; port : int
   ; disconnect : bool
 } [@@deriving yojson]
 
@@ -50,6 +51,7 @@ type body =
   | Contest    of Contest.t
   | Contestreq of contestreq
   | Client     of client
+  | Model      of Model.t
   | Context    of Context.t (* source of the context change *)
   [@@deriving yojson]
 
@@ -63,11 +65,11 @@ type time =
   [@@deriving yojson]
 
 let time_to_string time =
-  Printf.sprintf "%02d:%02d" time.hour time.second
+  Printf.sprintf "%02d:%02d" time.hour time.minute
 
 let datetime_to_string time =
-  Printf.sprintf "%d-%02d-%02d, %02d:%02d"
-    time.year time.month time.day time.hour time.second
+  Printf.sprintf "%d-%02d-%02d, %02d:%02d:%02d"
+    time.year time.month time.day time.hour time.minute time.second
 
 type t = 
   { id : int
@@ -75,7 +77,10 @@ type t =
   ; body : body }
   [@@deriving yojson]
 
-let event ~time ~id body = {time; id; body}
+let event ?time ?(id=(-1)) body =
+  let default = {year = 0; month = 1; day = 1; hour = 1; minute = 1; second = 1} in
+  let time = Option.value time ~default in
+  {time; id; body}
 
 let parse str =
   try Yojson.Safe.from_string str |> of_yojson with
@@ -117,19 +122,20 @@ let info ev =
   ev.body |> body_to_yojson |> Yojson.Safe.pretty_to_string
 
 let summary ev = let open Printf in match ev.body with
-  | Era era       -> sprintf "Era %d ended" era.number
-  | Epoch ep      -> sprintf "Epoch %d ended" ep.number
-  | Data _        -> sprintf "Dataset received"
-  | Datareq dr    -> sprintf "Data request %d submitted" dr.reqid
-  | Contest _     -> sprintf "Contest results received"
-  | Contestreq cr -> sprintf "Contest request %d submitted" cr.reqid
-  | Context _     -> sprintf "Context update"
+  | Era era       -> sprintf "era %d started" era.number
+  | Epoch ep      -> sprintf "epoch %d ended" ep.number
+  | Data _        -> sprintf "dataset obtained"
+  | Datareq dr    -> sprintf "data request %d ready" dr.reqid
+  | Contest _     -> sprintf "contest results obtained"
+  | Contestreq cr -> sprintf "contest request %d ready" cr.reqid
+  | Context _     -> sprintf "context update"
+  | Model m       -> sprintf "model '%s' initialized" m.Model.name
   | Client c -> match c.disconnect with
-    | true -> sprintf "Logoff: %s" c.name
-    | false -> sprintf "Login: %s" c.name
+    | true -> sprintf "client logoff '%s'" c.name
+    | false -> sprintf "client login '%s'" c.name
 
 let has_id id ev = (ev.id = id)
-let latest_id = function [] -> 0 | h :: _ -> h.id
+let latest_id = function [] -> -1 | h :: _ -> h.id
 
 let take_later_than id history =
   let rec f acc = function
@@ -140,4 +146,15 @@ let take_later_than id history =
 let latest = function
   | [] -> None
   | h :: _ -> Some h
+
+let rev_history_diff lnew lold =
+  let rec take acc a = function
+  | [] -> []
+  | h :: tl -> if h = a then acc else take (h :: acc) a tl
+  in
+  match lold with
+  | [] -> lnew
+  | h :: _ -> take [] h lnew
+  
+
 
