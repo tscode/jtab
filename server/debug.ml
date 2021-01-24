@@ -25,6 +25,7 @@ let test_events n = let open Event in
     ; trainloss = loss ()
     ; testloss = loss ()
     ; quality = rand ()
+    ; capacity = rand ()
     ; size = Random.int 1000 + 50
     ; ctxid = 0
     ; era = 1 }
