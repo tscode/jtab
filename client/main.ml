@@ -43,6 +43,16 @@ let rec init_status_polling uri_static uri_stream =
   ignore_result (poll_status uri_stream status set_status);
   status
 
+let init_tracking () =
+  let track, set_track = S.create true in
+  let btn = Dom_html.getElementById_exn "events-track-button" in
+  let handle _ =
+    set_track (not (S.value track));
+    btn##.classList##toggle (Js.string "active");
+  in
+  btn##.onclick := Dom_html.handler handle;
+  track
+
 (* query events *)
 
 let extract_model events = let open Event in
@@ -88,7 +98,7 @@ let remove_children el =
 let prepend_child el child =
   Dom.insertBefore el child (el##.firstChild)
 
-let insert_event_row table active set id_conv text ev =
+let insert_event_row table track active set id_conv text ev =
   let open Event in
   let row = let open Tyxml_js.Html in
     let index =
@@ -117,7 +127,8 @@ let insert_event_row table active set id_conv text ev =
     set None; set (Some ev.id); Js._true
   in
   row##.onclick := Dom_html.handler handle;
-  handle () |> ignore;
+  (* change focus on inserted row if tracking is enabled *)
+  if (S.value track) then handle () |> ignore;
   prepend_child table row;
   row
 
@@ -222,115 +233,157 @@ let show_details history active =
   f (S.value active);
   E.map f (S.changes active) |> E.keep
 
+(* progress graphs *)
+
 let insufficient_graph_data kind id =
  let open Tyxml_js.Html in
  let el = Dom_html.getElementById_exn id in
  let text = Printf.sprintf "not enough %s events recorded for progress graph" kind in
  let child = div ~a:[a_class ["insufficient-data"]] [txt text] in
  Dom.appendChild el (Tyxml_js.To_dom.of_div child)
-  
-let render_quality_graph id history =
-  let open Event in
-  let epoch_quality ev = match ev.body with
-  | Epoch ep -> Some ep.quality
-  | _ -> None
-  in
-  let data = List.filter_map epoch_quality history |> List.rev in
-  match List.length data <= 1 with
-  | true -> insufficient_graph_data "epoch" id
-  | false ->
-  Uplot.empty ~width:550 ~height:250 ()
-  |> Uplot.time ~label:"epoch"
-  |> Uplot.series ~label:"quality" ~data
-  |> Uplot.render id
-
+ 
 let rec find_index x = function
   | h :: t -> if h = x then 0 else 1 + find_index x t
   | [] -> -1
 
-let palette n i =
+let palette ls x =
+  match find_index x ls with
+  | -1 -> None
+  | idx ->
+  let n = List.length ls in
   let s, l = 50, 50 in
-  let h = (360. /. float_of_int n) *. (float_of_int i) in
-  Printf.sprintf "hsl(%.0f, %d%%, %d%%)" h s l
+  let h = (360. /. float_of_int n) *. (float_of_int idx) in
+  Printf.sprintf "hsl(%.0f, %d%%, %d%%)" h s l |> Option.some
 
-let collect_names get_names collection =
-  let f names x = List.sort_uniq String.compare (names @ get_names x) in
-  List.fold_left f [] collection
+let init_caches titles = List.map (fun x -> (x, [])) titles
 
-let add_series color width data names graph =
-  let f gr name =
-    let stroke, width, data = color name, width name, data name in
-    Uplot.series ~width ~stroke ~data ~label:name gr
-  in
-  List.fold_left f graph names
-
-let render_loss_graph id history =
-  let open Event in
-  let epoch_loss ev = match ev.body with
-  | Epoch ep -> Some (ep.trainloss, ep.testloss)
-  | _ -> None in
-  let train, test = List.filter_map epoch_loss history |> List.split in
-  match List.length train <= 1 with
-  | true -> insufficient_graph_data "epoch" id
-  | false ->
-  let render title ls =
-    let names = collect_names (List.map fst) ls in
-    let pal = palette (List.length names) in
-    let color name = pal (find_index name names) in
-    let width name = if name = "total" then 2. else 1. in
-    let get_value name l =
-      List.assoc_opt name l
-      |> Option.map (function 0. -> Float.nan | x -> x)
-      |> Option.value ~default:Float.nan
-    in
-    let data name = List.map (get_value name) ls |> List.rev in
-    Uplot.empty ~width:550 ~height:250 ~title ()
-    |> Uplot.time ~label:"epoch"
-    |> add_series color width data names
-    |> Uplot.render id
-  in
-  render "train" train;
-  render "test" test
-
-let render_elo_graph id history =
-  let open Event in
-  let open Contest in
-  let get_contest ev = match ev.body with Contest ct -> Some ct | _ -> None in
-  let contests = List.filter_map get_contest history in
-  match List.length contests <= 1 with
-  | true -> insufficient_graph_data "contest" id
-  | false ->
-  let players = collect_names (fun c -> c.names) contests in
-  let pal = palette (List.length players) in
-  let color player = pal (find_index player players) in
-  let width player = if String.contains player '*' then 2. else 1. in
-  let get_elo player contest =
-    let assoc = List.combine contest.names contest.elo in
-    List.assoc_opt player assoc
-    |> Option.map Float.round
+let extend_cache_row fresh cache name =
+  let get_value col =
+    List.assoc_opt name col
+    |> Option.map (function 0. -> Float.nan | x -> x)
     |> Option.value ~default:Float.nan
   in
-  let data player = List.map (get_elo player) contests |> List.rev in
-  Uplot.empty ~width:550 ~height:400 ()
-  |> Uplot.time ~label:"contest"
-  |> add_series color width data players
-  |> Uplot.render id
+  let values = List.map get_value fresh |> Array.of_list in
+  let n = List.hd cache |> snd |> Array.length in
+  let vals = match List.assoc_opt name cache with
+    | None -> Array.append values (Array.make n Float.nan)
+    | Some cached -> Array.append values cached
+  in (name, vals)
 
-let show_progress_graph history =
+let extend_cache fresh cache =
+  let cmp = String.compare in
+  let cache_names = List.map fst cache in
+  let fresh_names =
+    let f acc x = List.(sort_uniq cmp (acc @ (map fst) x)) in
+    List.fold_left f [] fresh
+  in
+  let names = fresh_names @ cache_names |> List.sort_uniq cmp in
+  List.map (extend_cache_row fresh cache) names
+
+let extend_caches ls caches =
+  let f (title, cache) = (title, extend_cache (List.assoc title ls) cache) in
+  List.map f caches
+
+let get_cached_names cs = 
+  List.map (fun (t, c) -> List.map fst c) cs
+  |> List.concat
+  |> List.sort_uniq String.compare
+
+let clear_graphs id = remove_children (Dom_html.getElementById_exn id)
+
+let render_graphs ~xlabel ~stroke ~width ?(renders=[]) id caches =
+  (* make sure that caches and renders have same order *)
+  let cmp a b = String.compare (fst a) (fst b) in
+  let cs, rs = List.sort cmp caches, List.sort cmp renders in
+  let compatible (t, c) (t', r) = (t = t' && Uplot.compatible c r) in
+  match List.compare_lengths cs rs = 0 && List.for_all2 compatible cs rs with
+  | true ->
+    (* can reuse the previous renders and just update their data *)
+    let f (t, c) r = (t, Uplot.update c r |> Option.get) in
+    List.map2 f caches (List.map snd rs)
+  | false ->
+    (* have to create new renders *)
+    let render (title, data) = (title,
+      Uplot.empty ~width:550 ~height:250 ~title ()
+      |> Uplot.xaxis ~label:(xlabel title)
+      |> Uplot.series_cache ~stroke ~width ~data
+      |> Uplot.render id)
+    in
+    clear_graphs id;
+    List.map render caches
+
+(* loss graph *)
+
+let init_loss_caches = init_caches ["train"; "test"]
+
+let extend_loss_caches events caches =
+  let extract ev = let open Event in match ev.body with
+    | Epoch ep -> Some (ep.trainloss, ep.testloss)
+    | _ -> None in
+  let train, test = List.filter_map extract events |> List.split in
+  extend_caches [("train", train); ("test", test)] caches
+
+let render_loss_graphs ?renders id caches =
+  let xlabel = Fun.const "epochs" in
+  let stroke = palette (get_cached_names caches) in
+  let width = function "total" -> Some 2. | _ -> Some 1. in
+  render_graphs ~xlabel ~stroke ~width ?renders id caches
+
+(* pool graph *)
+
+let init_pool_caches = init_caches ["train pool"]
+
+let extend_pool_caches events caches =
+  let extract ev = let open Event in match ev.body with
+    | Epoch ep -> Some [("quality", ep.quality); ("capacity", ep.capacity)]
+    | _ -> None in
+  let pool = List.filter_map extract events in
+  extend_caches [("train pool", pool)] caches
+
+let render_pool_graphs ?renders id caches =
+  let xlabel = Fun.const "epochs" in
+  let stroke = palette (get_cached_names caches) in
+  render_graphs ~xlabel ~stroke ?renders id caches
+
+(* elo graph *)
+
+let init_elo_caches = init_caches ["bayesian elo rating"]
+
+let extend_elo_caches events caches =
+  let extract ev = let open Event in match ev.body with
+    | Contest ct -> Some (List.combine ct.Contest.names ct.Contest.elo)
+    | _ -> None in
+  let elo = List.filter_map extract events in
+  extend_caches [("bayesian elo rating", elo)] caches
+
+let render_elo_graphs ?renders id caches =
+  let xlabel = Fun.const "contest" in
+  let stroke = palette (get_cached_names caches) in
+  let width name = if String.contains name '*' then Some 2. else Some 1. in
+  render_graphs ~xlabel ~stroke ~width id caches
+
+(* logic for showing graphs *)
+
+let show_progress_graphs events history =
+  let graph = ref `None in
   let id = "event-progress-graph" in
   let el = Dom_html.getElementById_exn "event-progress-select" in
   match Dom_html.CoerceTo.select el |> Js.Opt.to_option with
   | None -> prerr_endline "could not initialize progress graph"
   | Some el ->
+    (* register callback to act on changed selection *)
     let selected, set = S.create (el##.value |> Js.to_string) in
     let handle _ = set (el##.value |> Js.to_string); Js._true in
     el##.onchange := Dom.handler handle;
-    let f _ =
-      remove_children (Dom_html.getElementById_exn id);
+    (* initiate caches *)
+    let loss_caches = init_loss_caches ()
+    let on_history_change evs =
+      extend
+      (* remove_children (Dom_html.getElementById_exn id); *)
       match S.value selected with
-      | "loss" -> render_loss_graph id (S.value history)
-      | "quality" -> render_quality_graph id (S.value history)
-      | "elo" -> render_elo_graph id (S.value history)
+      | "loss" -> render_loss_graph id (S.value history) graph
+      | "pool" -> render_pool_graph id (S.value history) graph
+      | "elo" -> render_elo_graph id (S.value history) graph
       | _ -> prerr_endline "unsupported graph selected"
     in
     (* TODO: E.l2 does not seem to work here? Why? *)
@@ -338,7 +391,7 @@ let show_progress_graph history =
     E.map f (S.changes selected) |> E.keep;
     E.map f (S.changes history) |> E.keep
 
-let init_events_tab events history =
+let init_events_tab track events history =
   let search = event_searchstring () in
   let selector = event_selector () in
   let filter = S.Pair.pair search selector in
@@ -347,7 +400,7 @@ let init_events_tab events history =
   let insert ev =
     let id n = "event:" ^ Int.to_string n in
     let content = Event.summary ev in
-    let row = insert_event_row table active set id content ev in
+    let row = insert_event_row table track active set id content ev in
     if not (is_visible (S.value filter) ev)
     then row##.classList##add (Js.string "hidden")
   in
@@ -449,14 +502,14 @@ let show_matches active history =
   E.map update (S.changes active) |> E.keep
 
 
-let init_contests_tab events history =
+let init_contests_tab track events history =
   let id_str n = "contest:" ^ Int.to_string n in
   let active, set = S.create None in
   let table = Dom_html.getElementById_exn "contests-event-table" in
   let insert ev = let open Event in match ev.body with
   | Contest c ->
-    let content = "contest of era " ^ Int.to_string c.era in
-    insert_event_row table active set id_str content ev |> ignore
+    let content = "contest in era " ^ Int.to_string c.era in
+    insert_event_row table track active set id_str content ev |> ignore
   | _ -> ()
   in
   List.iter insert (S.value history |> List.rev);
@@ -596,14 +649,14 @@ let show_context_form history active =
   f (S.value active);
   E.map f (S.changes active) |> E.keep
 
-let init_context_tab events history =
+let init_context_tab track events history =
   let active, set = S.create None in
   let table = Dom_html.getElementById_exn "context-event-table" in
   let insert ev = let open Event in match ev.body with
   | Context ctx ->
     let id n = "context:" ^ Int.to_string n in
     let content = "context " ^ Int.to_string ctx.id in
-    insert_event_row table active set id content ev |> ignore
+    insert_event_row table track active set id content ev |> ignore
   | _ -> ()
   in
   List.iter insert (S.value history |> List.rev);
@@ -803,11 +856,12 @@ let () =
     let* () = Lwt_js_events.domContentLoaded () in
     let* events, history, model = init_event_polling "/api/events" "/api/stream/events" in
     let* status = init_status_polling "/api/status" "/api/stream/status" in
+    let track = init_tracking () in
     init_status_overview status model;
     init_tabs history;
-    init_events_tab events history;
-    init_context_tab events history;
-    init_contests_tab events history;
+    init_events_tab track events history;
+    init_context_tab track events history;
+    init_contests_tab track events history;
     fst (Lwt.wait ()) (* I am not sure if this is needed, or what is the best
     way to execute Lwt threads in Js_of_ocaml... *)
   in

@@ -62,7 +62,12 @@ let events_tab = let open Html in
       in
       div [title; container]
     in
-    let save_div =
+    let history_options =
+      let track =
+        let id = a_id "events-track-button" in
+        let cl = a_class ["button"; "active"] in
+        button ~a:[id; cl] [txt "track"] 
+      in
       let save =
         let id = a_id "events-save-button" in
         let cl = a_class ["button"] in
@@ -71,11 +76,11 @@ let events_tab = let open Html in
         a ~a:[hr; dl; id; cl] [txt "save"]
       in
       let id = a_id "events-history-buttons" in
-      div ~a:[id] [save]
+      div ~a:[id] [track; save]
     in
     let id = a_id "events-table-column" in
     let cl = a_class ["column"] in
-    div ~a:[id; cl] [filter; table; save_div]
+    div ~a:[id; cl] [filter; table; history_options]
 
   in
 
