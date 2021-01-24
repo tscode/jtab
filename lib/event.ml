@@ -7,6 +7,7 @@ type epoch = {
   ; trainloss : loss
   ; testloss : loss
   ; quality : float
+  ; capacity : float
   ; size : int
   ; ctxid : int
   ; era : int
