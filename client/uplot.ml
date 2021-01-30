@@ -58,7 +58,7 @@ let empty ?(width=300) ?(height=250) ?(title="") () =
   { x_axis; series = []; title; width; height }
 
 let auto_x_axis t l =
-  { data = Array.init l (fun i -> Float.of_int (i + 1))
+  { data = Array.init l Float.of_int
   ; label = t.label
   ; format_as_time = t.format_as_time }
 
@@ -137,11 +137,15 @@ let update ?(reset=true) cache r =
     r
   in
   let data = match List.assoc_opt "x" cache with
-  | Some x -> x :: List.map snd (List.remove_assoc "x" cache)
+  | Some x -> x :: List.map (fun l -> List.assoc l cache) r.labels
   | None ->
     let n = List.hd cache |> snd |> Array.length in
-    let x = Array.init n (fun i -> Float.of_int (n - i)) in
-    x :: List.map snd cache
+    let x = Array.init n Float.of_int in
+    x :: List.map (fun l -> List.assoc l cache) r.labels
   in
   Some (set data)
+
+let cache_length cache = match cache with
+  | (_, h) :: _ -> Array.length h
+  | [] -> 0
 

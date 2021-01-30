@@ -29,3 +29,5 @@ val compatible : cache -> render -> bool
 val update : ?reset : bool ->
              cache -> render -> render option
 
+
+val cache_length : cache -> int

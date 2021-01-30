@@ -100,7 +100,7 @@ let events_tab = let open Html in
     let title = div ~a:[a_class ["title"]] [txt "progress"] in
     let sel = select ~a:[a_id "event-progress-select"]
       [ option ~a:[a_value "loss"] (txt "loss")
-      ; option ~a:[a_value "quality"] (txt "quality")
+      ; option ~a:[a_value "pool"] (txt "pool")
       ; option ~a:[a_value "elo"] (txt "elo") ]
     in
     let box = 

@@ -238,7 +238,7 @@ let show_details history active =
 let insufficient_graph_data kind id =
  let open Tyxml_js.Html in
  let el = Dom_html.getElementById_exn id in
- let text = Printf.sprintf "not enough %s events recorded for progress graph" kind in
+ let text = Printf.sprintf "not enough %s data recorded for progress graph" kind in
  let child = div ~a:[a_class ["insufficient-data"]] [txt text] in
  Dom.appendChild el (Tyxml_js.To_dom.of_div child)
  
@@ -255,7 +255,7 @@ let palette ls x =
   let h = (360. /. float_of_int n) *. (float_of_int idx) in
   Printf.sprintf "hsl(%.0f, %d%%, %d%%)" h s l |> Option.some
 
-let init_caches titles = List.map (fun x -> (x, [])) titles
+let create_caches titles = List.map (fun x -> (x, [])) titles
 
 let extend_cache_row fresh cache name =
   let get_value col =
@@ -264,10 +264,12 @@ let extend_cache_row fresh cache name =
     |> Option.value ~default:Float.nan
   in
   let values = List.map get_value fresh |> Array.of_list in
-  let n = List.hd cache |> snd |> Array.length in
+  let n = match List.length cache = 0 with
+    | false -> List.hd cache |> snd |> Array.length
+    | true -> 0 in
   let vals = match List.assoc_opt name cache with
-    | None -> Array.append values (Array.make n Float.nan)
-    | Some cached -> Array.append values cached
+    | None -> Array.append (Array.make n Float.nan) values
+    | Some cached -> Array.append cached values
   in (name, vals)
 
 let extend_cache fresh cache =
@@ -291,7 +293,7 @@ let get_cached_names cs =
 
 let clear_graphs id = remove_children (Dom_html.getElementById_exn id)
 
-let render_graphs ~xlabel ~stroke ~width ?(renders=[]) id caches =
+let render_graphs ~xlabel ~stroke ~width ?(renders=[]) track id caches =
   (* make sure that caches and renders have same order *)
   let cmp a b = String.compare (fst a) (fst b) in
   let cs, rs = List.sort cmp caches, List.sort cmp renders in
@@ -299,8 +301,8 @@ let render_graphs ~xlabel ~stroke ~width ?(renders=[]) id caches =
   match List.compare_lengths cs rs = 0 && List.for_all2 compatible cs rs with
   | true ->
     (* can reuse the previous renders and just update their data *)
-    let f (t, c) r = (t, Uplot.update c r |> Option.get) in
-    List.map2 f caches (List.map snd rs)
+    let f (t, c) r = (t, Uplot.update ~reset:(S.value track) c r |> Option.get) in
+    List.map2 f cs (List.map snd rs)
   | false ->
     (* have to create new renders *)
     let render (title, data) = (title,
@@ -314,8 +316,6 @@ let render_graphs ~xlabel ~stroke ~width ?(renders=[]) id caches =
 
 (* loss graph *)
 
-let init_loss_caches = init_caches ["train"; "test"]
-
 let extend_loss_caches events caches =
   let extract ev = let open Event in match ev.body with
     | Epoch ep -> Some (ep.trainloss, ep.testloss)
@@ -323,15 +323,13 @@ let extend_loss_caches events caches =
   let train, test = List.filter_map extract events |> List.split in
   extend_caches [("train", train); ("test", test)] caches
 
-let render_loss_graphs ?renders id caches =
+let render_loss_graphs ?renders track id caches =
   let xlabel = Fun.const "epochs" in
   let stroke = palette (get_cached_names caches) in
   let width = function "total" -> Some 2. | _ -> Some 1. in
-  render_graphs ~xlabel ~stroke ~width ?renders id caches
+  render_graphs ~xlabel ~stroke ~width ?renders track id caches
 
 (* pool graph *)
-
-let init_pool_caches = init_caches ["train pool"]
 
 let extend_pool_caches events caches =
   let extract ev = let open Event in match ev.body with
@@ -340,56 +338,75 @@ let extend_pool_caches events caches =
   let pool = List.filter_map extract events in
   extend_caches [("train pool", pool)] caches
 
-let render_pool_graphs ?renders id caches =
+let render_pool_graphs ?renders track id caches =
   let xlabel = Fun.const "epochs" in
   let stroke = palette (get_cached_names caches) in
-  render_graphs ~xlabel ~stroke ?renders id caches
+  let width = Fun.const None in
+  render_graphs ~xlabel ~stroke ~width ?renders track id caches
 
 (* elo graph *)
-
-let init_elo_caches = init_caches ["bayesian elo rating"]
 
 let extend_elo_caches events caches =
   let extract ev = let open Event in match ev.body with
     | Contest ct -> Some (List.combine ct.Contest.names ct.Contest.elo)
     | _ -> None in
   let elo = List.filter_map extract events in
-  extend_caches [("bayesian elo rating", elo)] caches
+  extend_caches [("elo rating", elo)] caches
 
-let render_elo_graphs ?renders id caches =
+let render_elo_graphs ?renders track id caches =
   let xlabel = Fun.const "contest" in
   let stroke = palette (get_cached_names caches) in
-  let width name = if String.contains name '*' then Some 2. else Some 1. in
-  render_graphs ~xlabel ~stroke ~width id caches
+  let width name = if String.contains name '*' then Some 3. else Some 1. in
+  render_graphs ~xlabel ~stroke ~width track id caches
 
-(* logic for showing graphs *)
+(* displaying graphs *)
 
-let show_progress_graphs events history =
-  let graph = ref `None in
+let init_cachelist () = [
+    ("loss", (create_caches ["train"; "test"], extend_loss_caches))
+  ; ("pool", (create_caches ["train pool"], extend_pool_caches))
+  ; ("elo",  (create_caches ["elo rating"], extend_elo_caches))
+]
+
+let update_cachelist cachelist events = 
+  let f (name, (c, up)) = (name, (up events c, up)) in
+  List.map f cachelist
+
+let render_progress_graphs ?renders track id caches graph =
+  let sufficient_data = let open List in
+    length caches > 0 && Uplot.cache_length (hd caches |> snd) > 1
+  in
+  match sufficient_data with
+  | false -> clear_graphs id; insufficient_graph_data graph id; []
+  | true -> match graph with
+  | "loss" -> [("loss", render_loss_graphs ?renders track id caches)]
+  | "pool" -> [("pool", render_pool_graphs ?renders track id caches)]
+  | "elo"  -> [("elo",  render_elo_graphs  ?renders track id caches)] 
+  | _ -> print_endline "unsupported progress graph type selected"; []
+
+let show_progress_graphs track events history =
+  let renderopt = ref [] in
+  let cachelist = ref [] in
   let id = "event-progress-graph" in
   let el = Dom_html.getElementById_exn "event-progress-select" in
   match Dom_html.CoerceTo.select el |> Js.Opt.to_option with
   | None -> prerr_endline "could not initialize progress graph"
   | Some el ->
-    (* register callback to act on changed selection *)
-    let selected, set = S.create (el##.value |> Js.to_string) in
-    let handle _ = set (el##.value |> Js.to_string); Js._true in
-    el##.onchange := Dom.handler handle;
-    (* initiate caches *)
-    let loss_caches = init_loss_caches ()
-    let on_history_change evs =
-      extend
-      (* remove_children (Dom_html.getElementById_exn id); *)
-      match S.value selected with
-      | "loss" -> render_loss_graph id (S.value history) graph
-      | "pool" -> render_pool_graph id (S.value history) graph
-      | "elo" -> render_elo_graph id (S.value history) graph
-      | _ -> prerr_endline "unsupported graph selected"
-    in
-    (* TODO: E.l2 does not seem to work here? Why? *)
-    f ();
-    E.map f (S.changes selected) |> E.keep;
-    E.map f (S.changes history) |> E.keep
+  (* register callback to act on changed selection *)
+  let selected, set = S.create (el##.value |> Js.to_string) in
+  let handle _ = set (el##.value |> Js.to_string); Js._true in
+  el##.onchange := Dom.handler handle;
+  (* initiate caches *)
+  cachelist := init_cachelist ();
+  let on_change graph events =
+    cachelist := update_cachelist !cachelist events;
+    let caches = List.assoc graph !cachelist |> fst in
+    let renders = List.assoc_opt graph !renderopt in
+    renderopt := render_progress_graphs ?renders track id caches graph;
+  in
+  on_change (S.value selected) (S.value history |> List.rev);
+  E.map (fun ev -> on_change (S.value selected) ev) events |> E.keep;
+  E.map (fun gr -> on_change gr []) (S.changes selected) |> E.keep
+
 
 let init_events_tab track events history =
   let search = event_searchstring () in
@@ -408,7 +425,7 @@ let init_events_tab track events history =
   E.map (List.iter insert) events |> E.keep;
   connect_filter table history filter;
   show_details history active;
-  show_progress_graph history
+  show_progress_graphs track events history
 
 (* script for the CONTESTS tab *)
 
